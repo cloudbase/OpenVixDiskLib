@@ -7,21 +7,10 @@ from pyVim.connect import Disconnect
 from pyVmomi import vim
 import pytest
 
-from openvixdisklib import nfc_auth
 from openvixdisklib import openvixdisklib as vixdisklib
 from tests.integration.base import (
-    LabEnv, SECTOR_AT_1GB, SECTOR_SIZE, _wait_for_task, pattern_bytes)
-
-
-def _connect_lab_vim(lab: LabEnv) -> vim.ServiceInstance:
-    """Login to the lab vCenter with the session VM's credentials."""
-    return nfc_auth.connect_vim(
-        lab.host,
-        lab.username,
-        lab.password,
-        port=lab.port,
-        thumbprint=lab.thumbprint,
-        allow_untrusted=lab.allow_untrusted)
+    LabEnv, SECTOR_AT_1GB, SECTOR_SIZE, _connect_vim, _wait_for_task,
+    pattern_bytes)
 
 
 def _virtual_disk_backing(
@@ -102,7 +91,9 @@ class TestOpenvixdisklib:
 
         assert read_sector(lab.disk_path) == expected
 
-        si = _connect_lab_vim(lab)
+        si = _connect_vim(
+            lab.host, lab.username, lab.password, lab.port,
+            lab.thumbprint, lab.allow_untrusted)
         try:
             vm = vim.VirtualMachine(lab.vm_moref, si._stub)
             _wait_for_task(
