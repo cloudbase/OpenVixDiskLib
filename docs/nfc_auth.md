@@ -126,7 +126,11 @@ A disk-scoped **read** ticket also works and returns the same
 
 `diskDeviceKey` is `VirtualDisk.key` from `vm.config.hardware.device`
 (2000 for Hard disk 1). The replacement resolves it from the datastore
-path when `open` is given a VMDK rather than a key.
+path when `open` is given a VMDK rather than a key. That path may be
+the current leaf or a parent in `backing.parent` (snapshot deltas such
+as `…-000007.vmdk` after the VM has moved on to `…-000008.vmdk`). The
+ticket still uses the device key; `OPEN_FILE` then names the snapshot
+file.
 
 ### Return value: `vim.HostServiceTicket`
 

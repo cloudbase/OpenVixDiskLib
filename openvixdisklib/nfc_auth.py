@@ -128,13 +128,22 @@ def connect_vim(
 
 
 def _virtual_disk_key(vm: vim.VirtualMachine, disk_path: str) -> int:
-    """Return the VirtualDisk device key whose backing path is ``disk_path``."""
+    """Return the VirtualDisk device key for ``disk_path``.
+
+    ``disk_path`` may be the currently attached leaf or any parent in
+    that disk's snapshot delta chain (``backing.parent``). After a
+    snapshot, the VM's hardware points at the new leaf (for example
+    ``…-000008.vmdk``) while VDDK Open still uses the snapshot file
+    (``…-000007.vmdk``). Both share the same ``VirtualDisk.key``.
+    """
     for device in vm.config.hardware.device:
-        if isinstance(device, vim.vm.device.VirtualDisk):
-            backing = getattr(device, "backing", None)
-            file_name = getattr(backing, "fileName", None)
-            if file_name == disk_path:
+        if not isinstance(device, vim.vm.device.VirtualDisk):
+            continue
+        backing = getattr(device, "backing", None)
+        while backing is not None:
+            if getattr(backing, "fileName", None) == disk_path:
                 return device.key
+            backing = getattr(backing, "parent", None)
     raise ValueError(
         f"VMDK path {disk_path!r} is not attached to {vm._moId}")
 
