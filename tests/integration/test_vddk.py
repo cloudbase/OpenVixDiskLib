@@ -4,28 +4,23 @@
 """Exercise native VDDK via tests.integration.vixdisklib against the lab."""
 
 from tests.integration import vixdisklib
-from tests.integration.base import TestBase
+from tests.integration.base import LabEnv, SECTOR_SIZE, pattern_bytes
 
 
-class VddkTest(TestBase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        """Skip when the bundled VDDK shared library is not present."""
-        cls.require_vddk()
-        super().setUpClass()
-
-    def test_write_and_read_first_sector(self) -> None:
+class TestVddk:
+    def test_write_and_read_first_sector(
+            self, lab: LabEnv, vddk: None) -> None:
         """Open the temp VMDK with VDDK, write sector 0, and read it back."""
         handle = vixdisklib.VixDiskLibHandle(
             vixdisklib_compatibility_version="8.0",
             config_path=None)
-        write_buf = vixdisklib.get_buffer(self.SECTOR_SIZE)
-        read_buf = vixdisklib.get_buffer(self.SECTOR_SIZE)
-        expected = self.pattern_bytes(self.SECTOR_SIZE, b"VDDK-S0")
-        write_buf[:self.SECTOR_SIZE] = expected
-        with handle.connect(**self.vixdisklib_connect_kwargs()) as conn:
-            with handle.open(conn, self.DISK_PATH, flags=0) as disk:
+        write_buf = vixdisklib.get_buffer(SECTOR_SIZE)
+        read_buf = vixdisklib.get_buffer(SECTOR_SIZE)
+        expected = pattern_bytes(SECTOR_SIZE, b"VDDK-S0")
+        write_buf[:SECTOR_SIZE] = expected
+        with handle.connect(**lab.vixdisklib_connect_kwargs()) as conn:
+            with handle.open(conn, lab.disk_path, flags=0) as disk:
                 handle.write(disk, 0, 1, write_buf)
-                read_buf[:self.SECTOR_SIZE] = b"\xa5" * self.SECTOR_SIZE
+                read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
                 handle.read(disk, 0, 1, read_buf)
-                self.assertEqual(read_buf.raw[:self.SECTOR_SIZE], expected)
+                assert read_buf.raw[:SECTOR_SIZE] == expected

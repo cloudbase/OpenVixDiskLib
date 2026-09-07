@@ -63,7 +63,7 @@ VDDK-shaped handle.
 | `openvixdisklib/openvixdisklib.py` | Drop-in handle (`connect` / `open` / `read` / `write`) |
 | `openvixdisklib/nfc_auth.py`       | VIM login, NFC ticket, authd on 902                    |
 | `openvixdisklib/nfc_open.py`       | Classic NFC handshake, AIO open, sector read/write     |
-| `tests/integration/`               | Live unittest suite against a lab vCenter              |
+| `tests/integration/`               | Live pytest suite against a lab vCenter                |
 | `tests/integration/vixdisklib.py`  | Native VDDK wrapper used only to cross-check           |
 | `docs/`                            | Protocol notes and reverse-engineering steps           |
 
@@ -85,19 +85,19 @@ datacenter: Datacenter
 datastore: datastore0
 ```
 
-`TestBase.setUpClass` creates an empty VM with a 10 GiB thin disk on
-that datastore and tears it down in `tearDownClass`. Tests write known
-patterns and read them back.
+A session-scoped pytest fixture creates an empty VM with a 10 GiB thin
+disk on that datastore and tears it down when the session ends. Tests
+write known patterns and read them back.
 
 ```bash
 tox -e integration
 # or
-.venv/bin/python -m unittest discover -s tests/integration
+.venv/bin/pytest tests/integration
 ```
 
 VDDK cross-check tests skip when `libvixDiskLib` is not loadable from
 `.vddk`. `tox -e integration` sets `LD_LIBRARY_PATH` to that directory
-and clears `LD_PRELOAD`. For a direct unittest run, do the same.
+and clears `LD_PRELOAD`. For a direct pytest run, do the same.
 
 Lint and typecheck: `tox -e pep8`, `tox -e mypy`.
 

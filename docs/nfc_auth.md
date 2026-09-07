@@ -251,7 +251,7 @@ hard-coding the lab certificate.
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.integration.test_nfc_auth
+.venv/bin/pytest tests/integration/test_nfc_auth.py
 ```
 
 The test completes VIM login and the authd handshake (`200 Connect`)

@@ -105,7 +105,7 @@ Writes use the same 44-byte IO payload with opcode `2`; see
 `openvixdisklib/nfc_open.py`. Run:
 
 ```bash
-.venv/bin/python -m unittest tests.integration.test_nfc_read_write
+.venv/bin/pytest tests/integration/test_nfc_read_write.py
 ```
 
 The integration test writes and then reads the captured VDDK ranges

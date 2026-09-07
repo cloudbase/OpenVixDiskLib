@@ -206,7 +206,7 @@ classic type 4 `NFC_SESSION_COMPLETE`.
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.integration.test_nfc_open
+.venv/bin/pytest tests/integration/test_nfc_open.py
 ```
 
 The test opens the temporary lab VMDK, asserts an opaque handle and

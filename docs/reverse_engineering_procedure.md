@@ -9,9 +9,9 @@ NFC work can follow the same loop instead of rediscovering it.
 
 Scope so far: `VixDiskLib_ConnectEx` + `VixDiskLib_Open` +
 `VixDiskLib_Read` + `VixDiskLib_Write` against lab vCenter 8.0.1 /
-ESXi 8, transport `nbd`. Driver: `tests/integration/` (`TestBase`
-creates a temporary empty VM with a 10 GiB disk in `setUpClass` and
-destroys it in `tearDownClass`).
+ESXi 8, transport `nbd`. Driver: `tests/integration/` (the session-scoped
+`lab` fixture creates a temporary empty VM with a 10 GiB disk and
+destroys it when the pytest session ends).
 
 Rule from `AGENTS.md`: reuse pyVmomi for every public VIM operation.
 Only reimplement what pyVmomi does not expose.

@@ -7,9 +7,10 @@
 - The end goal is to have a Python library that can be used as a VDDK replacement
   to retrieve VMware disk contents.
 - Integration tests under `tests/integration/` are a good starting point for
-  interacting with the VMware NBD / NFC APIs. They inherit lab credentials and
-  VM/disk settings from `tests.integration.base.TestBase`. The base
-  class creates a temporary empty VM for the run. We can make use of
+  interacting with the VMware NBD / NFC APIs. They take a session-scoped
+  `lab` fixture from `tests/integration/conftest.py` (credentials and VM
+  settings in `tests.integration.base.LabEnv`). The fixture creates a
+  temporary empty VM for the pytest session. We can make use of
   them to reverse engineer the VMware protocol, for example making various
   calls, capturing the request and replies and then trying to determine the
   structures used by the protocol.
@@ -34,14 +35,13 @@
   licensing constrains.
 - `tests/integration/vixdisklib.py` is a Python wrapper on top of
   `libvixDiskLib`, used to cross-check the replacement against native VDDK.
-- Integration tests live under `tests/integration/`, use the unittest
-  framework, and inherit `tests.integration.base.TestBase`. Lab vCenter
-  credentials, datacenter, and datastore come from repo-root
-  `.test_config.yaml` (gitignored; sample in `README.md`). Each test
-  class shares a temporary empty VM with a 10 GiB disk created in
-  `TestBase.setUpClass` and destroyed in `tearDownClass`. Run them with
+- Integration tests live under `tests/integration/` and use pytest.
+  Lab vCenter credentials, datacenter, and datastore come from repo-root
+  `.test_config.yaml` (gitignored; sample in `README.md`). A session-scoped
+  fixture creates one temporary empty VM with a 10 GiB disk for the whole
+  run and destroys it at session end. Run them with
   `tox -e integration` or
-  `.venv/bin/python -m unittest discover -s tests/integration`.
+  `.venv/bin/pytest tests/integration`.
 
 
 ## Other rules
