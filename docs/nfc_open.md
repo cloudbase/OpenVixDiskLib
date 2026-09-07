@@ -11,53 +11,60 @@ VDDK 8.0.2 verbose logs
 Authentication is already done: VIM login, NFC ticket (`NfcGetVmFiles`
 for read-only, `NfcRandomAccessOpenDisk` for write), TLS to authd,
 `SESSION` / `BANNER` / `THUMBPRINT_SHA2 PlainText` / `PROXY`. This
-stage starts at `200 Connect ha-nfc` and ends with an open file handle
-that can read and write sectors. Flags `0x1a` require the writable
-ticket; the same flags on a `GetVmFiles` ticket fail with
-`VIX_E_FILE_READ_ONLY`.
+stage starts at `200 Connect ha-nfc` (NBD) or `200 Connect ha-nfcssl`
+(NBDSSL) and ends with an open file handle that can read and write
+sectors. Flags `0x1a` require the writable ticket; the same flags on a
+`GetVmFiles` ticket fail with `VIX_E_FILE_READ_ONLY`.
 
 ## Mapping from VDDK
 
-| VDDK call / log                                      | Wire effect                                              |
-| ---------------------------------------------------- | -------------------------------------------------------- |
-| `VixDiskLib_Open`                                    | Ticket + authd (see `nfc_auth.md`), then this protocol   |
-| `NBD_ClientOpen` `vpxa-nfc://[ds] path.vmdk@esxi:902` | Datastore path is the NFC open argument, not the ticket |
-| `useSSL=0`                                           | NFC bytes are raw TCP, not `SSL_write`                   |
-| `NfcProcessSessionParams` flags `0x3`                | Classic 264-byte session messages                        |
-| `SendConnectionDataMsg` payloadInfo 4 and 7          | Client name `vddk` (4) and opId `nbdmode` (7)            |
-| Server version 11                                    | Classic version message; 11 on this ESXi 8 lab           |
-| `NfcAio_OpenSession`                                 | AIO framing after the classic handshake                  |
-| `NfcUtil_PrintFileInfoOpenFlag` `NFC_DISK` `0x1e`    | `NFC_AIO_MSG_OPEN_FILE` (read-only)                      |
-| Open without `VIXDISKLIB_FLAG_OPEN_READ_ONLY`        | `OPEN_FILE` flags `0x1a` (read-write)                    |
-| `VixDiskLib_Read` / `VixDiskLib_Write`               | `NFC_AIO_MSG_IO` + sector bytes                          |
+| VDDK call / log                                               | Wire effect                                                |
+| ------------------------------------------------------------- | ---------------------------------------------------------- |
+| `VixDiskLib_Open`                                             | Ticket + authd (see `nfc_auth.md`), then this protocol     |
+| `NBD_ClientOpen` `vpxa-nfc://[ds] path.vmdk@esxi:902`         | Datastore path is the NFC open argument, not the ticket    |
+| `NBD_ClientOpen` `vpxa-nfcssl://…` / `useSSL=1`               | Same NFC after a second TLS handshake on the authd fd      |
+| `useSSL=0`                                                    | NFC bytes are raw TCP, not `SSL_write`                     |
+| `NfcProcessSessionParams` flags `0x3`                         | Classic 264-byte session messages                          |
+| `SendConnectionDataMsg` payloadInfo 4 and 7                   | Client name `vddk` (4) and opId `nbdmode` (7)              |
+| Server version 11                                             | Classic version message; 11 on this ESXi 8 lab             |
+| `NfcAio_OpenSession`                                          | AIO framing after the classic handshake                    |
+| `NfcUtil_PrintFileInfoOpenFlag` `NFC_DISK` `0x1e`             | `NFC_AIO_MSG_OPEN_FILE` (read-only)                        |
+| Open without `VIXDISKLIB_FLAG_OPEN_READ_ONLY`                 | `OPEN_FILE` flags `0x1a` (read-write)                      |
+| `VixDiskLib_Read` / `VixDiskLib_Write`                        | `NFC_AIO_MSG_IO` + sector bytes                            |
 
 `snapshot_ref` is still not on the wire. Integration tests pass the
 flat VMDK created with the temporary lab VM.
 
-## After PROXY: plaintext on the TLS fd
+## After PROXY: NBD plaintext vs NBDSSL wrap
 
-`THUMBPRINT_SHA2 PlainText` tells authd not to wrap NFC in a second
-TLS session. VDDK logs `useSSL=0` and “Plain-text connection is
-deprecated”.
+`THUMBPRINT_SHA2 PlainText` is used for both transports. The PROXY
+service name selects whether NFC gets a second TLS session.
 
-On the wire that means:
+NBD (`PROXY vpxa-nfc` → `200 Connect ha-nfc`, VDDK `useSSL=0`):
 
 1. Authd commands stay inside the original TLS session (`SSL_write` /
    `SSL_read`).
-2. After `200 Connect ha-nfc`, VDDK calls `write(SSL_get_fd(ssl), …)`
-   and `read` on that same descriptor. Those buffers are NFC, not TLS
-   records (`0x17 0x03 …`).
-3. ESXi’s `ha-nfc` side does the same: replies are plaintext NFC.
+2. After `200 Connect ha-nfc`, NFC is `write(SSL_get_fd(ssl), …)` /
+   `read` on that descriptor. Those buffers are not TLS records
+   (`0x17 0x03 …`).
+3. An SSL hook that only interposes `SSL_write` / `SSL_read` goes
+   silent after PROXY; a `write` / `read` hook on port 902 shows the
+   frames.
+4. Python must not use `SSLSocket.send` here: that would encrypt bytes
+   the server now reads as NFC. `nfc_open.takeover_authd_socket` dups
+   the fd. `unwrap()` / `SSL_shutdown` is not used.
 
-An SSL hook that only interposes `SSL_write` / `SSL_read` therefore
-goes silent after PROXY. Interposing `write` / `read` and filtering
-`getpeername` port 902 shows the frames.
+NBDSSL (`PROXY vpxa-nfcssl` → `200 Connect ha-nfcssl`, `useSSL=1`):
 
-Python must not use `SSLSocket.send` for this stage: that would
-`SSL_write` and encrypt bytes the server now reads as NFC.
-`nfc_open.takeover_authd_socket` dups `SSL_get_fd` and uses a raw
-`socket.socket`. `unwrap()` / `SSL_shutdown` is not used; VDDK does
-not send `close_notify` before NFC.
+1. Authd commands are the same, including `THUMBPRINT_SHA2 PlainText`.
+2. After `200 Connect ha-nfcssl`, both sides abandon the authd TLS
+   session. `ha-nfcssl` expects a new ClientHello on the same TCP
+   connection.
+3. `nfc_open.wrap_nfcssl_socket` dups the fd and
+   `SSLContext.wrap_socket`s it. NFC then uses `SSLSocket.sendall` /
+   `recv` (TLS application data). The classic 264-byte handshake still
+   sends the ASCII body `PlainText`; that is NFC's own encoding, not
+   the authd transport.
 
 ## Classic 264-byte messages
 
@@ -200,6 +207,7 @@ classic type 4 `NFC_SESSION_COMPLETE`.
 | ----------------------------- | ----------------------------------------------- |
 | VIM + authd                   | `openvixdisklib.nfc_auth.authenticate`          |
 | Dup fd, skip TLS for NFC      | `openvixdisklib.nfc_open.takeover_authd_socket` |
+| Second TLS for nbdssl         | `openvixdisklib.nfc_open.wrap_nfcssl_socket`    |
 | Handshake + AIO + OPEN_FILE   | `openvixdisklib.nfc_open.open_disk`             |
 | Sector read / write / close   | `openvixdisklib.nfc_open.NfcDisk`               |
 
@@ -218,8 +226,7 @@ I/O: `docs/nfc_read.md`, `docs/nfc_write.md`, and
 
 - `DDB_GET` / geometry / compression / encryption keys
 - `NFC_DELTA_DISK`, change-block tracking
-- Host-switch (`NFC_AIO_SWITCH_HOST_*`) and a second NFCSSL wrap
-  (`useSSL=1`, not what VDDK NBD used here)
+- Host-switch (`NFC_AIO_SWITCH_HOST_*`)
 - Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
 
 Reads after open are in `docs/nfc_read.md`. Writes are in

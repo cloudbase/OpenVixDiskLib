@@ -10,7 +10,8 @@ from VDDK 8 NBD traffic; see `docs/`.
 
 ## Status
 
-Implemented against vCenter 8 / ESXi 8, transport `nbd`:
+Implemented against vCenter 8 / ESXi 8. Default transport is `nbdssl`
+(`nbd` is still available):
 
 - `VixDiskLib_ConnectEx` (UID credentials)
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
@@ -45,7 +46,7 @@ with handle.connect(
         username="administrator@vsphere.local",
         password="secret",
         vmx_spec="moref=vm-1234",
-        transport_modes="nbd",
+        transport_modes="nbdssl",
         read_only=False) as conn:
     with handle.open(conn, "[datastore] vm/vm.vmdk", flags=0) as disk:
         handle.write(disk, 0, 1, buf)

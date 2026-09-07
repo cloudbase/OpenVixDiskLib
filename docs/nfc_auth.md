@@ -25,16 +25,17 @@ password to ESXi port 902. It:
 3. Connects to the ESXi **authd** daemon on TCP 902, upgrades to TLS,
    and presents that ticket.
 
-| VDDK call                         | What actually happens                                      |
-| --------------------------------- | ---------------------------------------------------------- |
-| `VixDiskLib_InitEx`               | Load plugins, SSL, logging                                 |
-| `VixDiskLib_ConnectEx`            | SOAP `SessionManager.Login` to vCenter                     |
-| `VixDiskLib_Open` (read-only)     | `NfcGetVmFiles` ticket, then authd handshake, then NFC I/O |
-| `VixDiskLib_Open` (read-write)    | `NfcRandomAccessOpenDisk` ticket (disk key + host)         |
-| `transport_modes="nbd"`           | NBD over NFC (`vpxa-nfc://...@esxi:902`)                   |
-| `vmxSpec=moref=vm-13098`          | VM managed object used as the ticket target                |
-| `snapshot_ref`                    | Not consumed by the ticket call itself                     |
-| `VIXDISKLIB_CRED_UID`             | Username/password for VIM only                             |
+| VDDK call                            | What actually happens                                      |
+| ------------------------------------ | ---------------------------------------------------------- |
+| `VixDiskLib_InitEx`                  | Load plugins, SSL, logging                                 |
+| `VixDiskLib_ConnectEx`               | SOAP `SessionManager.Login` to vCenter                     |
+| `VixDiskLib_Open` (read-only)        | `NfcGetVmFiles` ticket, then authd handshake, then NFC I/O |
+| `VixDiskLib_Open` (read-write)       | `NfcRandomAccessOpenDisk` ticket (disk key + host)         |
+| `transport_modes="nbdssl"` (default) | NBDSSL (`vpxa-nfcssl://...@esxi:902`, second TLS wrap)     |
+| `transport_modes="nbd"`              | NBD over NFC (`vpxa-nfc://...@esxi:902`)                   |
+| `vmxSpec=moref=vm-13098`             | VM managed object used as the ticket target                |
+| `snapshot_ref`                       | Not consumed by the ticket call itself                     |
+| `VIXDISKLIB_CRED_UID`                | Username/password for VIM only                             |
 
 Lab topology used for capture:
 
@@ -185,8 +186,9 @@ Plain-text connection is deprecated; use SSL to connect to NFC server
 ```
 
 `useSSL=0` does **not** mean skip TLS on 902. It means skip a second
-NFCSSL wrap after authd TLS (`THUMBPRINT_SHA2 PlainText`). The
-management channel is still TLS.
+NFCSSL wrap after authd TLS. The management channel is still TLS.
+`useSSL=1` (nbdssl) is the same authd commands with `PROXY vpxa-nfcssl`
+and a second TLS handshake after `200 Connect`.
 
 Intercepted writes/reads after the TLS handshake:
 
@@ -200,6 +202,20 @@ C -> PROXY vpxa-nfc\r\n
 S -> 200 Connect ha-nfc\r\n
 ```
 
+NBDSSL uses the same `SESSION` / `BANNER` / `THUMBPRINT_SHA2 PlainText`
+sequence. The ticket still has `service=vpxa-nfc`; the client rewrites
+the PROXY argument:
+
+```
+C -> PROXY vpxa-nfcssl\r\n
+S -> 200 Connect ha-nfcssl\r\n
+```
+
+After that reply, authd TLS is finished and `ha-nfcssl` expects a **new**
+TLS ClientHello on the same TCP connection (`useSSL=1`). NFC frames then
+travel as TLS application data of that second session. NBD (`useSSL=0`)
+skips the second wrap and sends NFC as raw TCP instead.
+
 Notes:
 
 - `SESSION` does not get a reply of its own. Waiting for a line after
@@ -209,10 +225,11 @@ Notes:
   commands, so `THUMBPRINT_SHA2 <colon-thumbprint>` is parsed as one
   token and returns `501 Invalid arguments`. `PlainText` has no extra
   spaces/colons and is the argument VDDK sends.
-- `PROXY` uses `ticket.service` (`vpxa-nfc` via vCenter). The success
-  line names the host-side NFC endpoint (`ha-nfc`).
-- After `200 Connect`, the socket speaks binary NFC (not documented
-  here).
+- `PROXY` uses `ticket.service` (`vpxa-nfc` via vCenter) for NBD. NBDSSL
+  appends `ssl` (`vpxa-nfcssl`). The success line names the host-side
+  endpoint (`ha-nfc` or `ha-nfcssl`).
+- After `200 Connect`, NBD speaks binary NFC on the raw fd. NBDSSL
+  starts a second TLS handshake, then the same NFC protocol.
 
 ### Commands that are not used for this ticket type
 
@@ -259,7 +276,8 @@ and asserts an established TLS socket on `ticket.host:ticket.port`.
 
 ## What comes after authentication
 
-Authentication stops at `200 Connect ha-nfc`. Opening the VMDK and
-reading or writing sectors is documented in `docs/nfc_open.md` and
-implemented in `openvixdisklib/nfc_open.py`. The datastore path is
-consumed there (and, for writes, as `diskDeviceKey` on the ticket).
+Authentication stops at `200 Connect ha-nfc` (NBD) or `200 Connect
+ha-nfcssl` (NBDSSL). Opening the VMDK and reading or writing sectors is
+documented in `docs/nfc_open.md` and implemented in
+`openvixdisklib/nfc_open.py`. The datastore path is consumed there
+(and, for writes, as `diskDeviceKey` on the ticket).

@@ -242,10 +242,25 @@ def _expect_code(line: str, code: str, what: str) -> str:
     return line[len(code):].lstrip()
 
 
+def nfcssl_service_name(service: str) -> str:
+    """Return the NFCSSL authd PROXY service for an NFC service name.
+
+    VCenter tickets still report ``vpxa-nfc``. NBDSSL uses
+    ``PROXY vpxa-nfcssl`` (or ``ha-nfcssl`` on a direct ESXi ticket).
+
+    Args:
+        service: Ticket ``service`` field, for example ``vpxa-nfc``.
+    """
+    if service.endswith("ssl"):
+        return service
+    return f"{service}ssl"
+
+
 def connect_authd(
         ticket: vim.HostServiceTicket,
         allow_untrusted: bool = False,
-        timeout: float = 30.0) -> ssl.SSLSocket:
+        timeout: float = 30.0,
+        nfc_ssl: bool = True) -> ssl.SSLSocket:
     """Complete the ESXi authd handshake using an NFC HostServiceTicket.
 
     Wire sequence captured from VDDK against authd on TCP 902:
@@ -253,14 +268,20 @@ def connect_authd(
     1. Read the plaintext 220 banner, then wrap the socket with TLS.
     2. SESSION <sessionId>
     3. BANNER
-    4. THUMBPRINT_SHA2 PlainText  (NFC data stays on this TLS socket)
-    5. PROXY <ticket.service>     (vpxa-nfc when connecting via vCenter)
+    4. THUMBPRINT_SHA2 PlainText
+    5. PROXY <ticket.service>     (vpxa-nfc / nbd) or vpxa-nfcssl (nbdssl)
+
+    ``THUMBPRINT_SHA2 PlainText`` is used for both transports. NBDSSL
+    is selected by the PROXY service name; after ``200 Connect
+    ha-nfcssl`` a second TLS handshake is started in ``nfc_open``.
 
     Args:
         ticket: One-time ticket from get_nfc_ticket().
         allow_untrusted: If False, require the peer SHA-1 thumbprint to match
             ticket.sslThumbprint.
         timeout: Socket timeout in seconds.
+        nfc_ssl: When True (the default), PROXY to the NFCSSL service
+            used by nbdssl. Pass False for plaintext NFC (nbd).
     """
     host = ticket.host
     port = ticket.port or AUTHD_DEFAULT_PORT
@@ -294,6 +315,8 @@ def connect_authd(
         _expect_code(_readline(ssock), "200", "THUMBPRINT_SHA2")
 
         service = ticket.service or "vpxa-nfc"
+        if nfc_ssl:
+            service = nfcssl_service_name(service)
         ssock.sendall(f"PROXY {service}\r\n".encode("ascii"))
         _expect_code(_readline(ssock), "200", "PROXY")
         return ssock
@@ -309,10 +332,12 @@ class NfcAuthSession:
             self,
             si: vim.ServiceInstance,
             ticket: vim.HostServiceTicket,
-            authd_sock: ssl.SSLSocket) -> None:
+            authd_sock: ssl.SSLSocket,
+            nfc_ssl: bool = True) -> None:
         self.si = si
         self.ticket = ticket
         self.authd_sock = authd_sock
+        self.nfc_ssl = nfc_ssl
 
     def close(self) -> None:
         """Close the authd socket and logout of the VIM session."""
@@ -338,7 +363,8 @@ def authenticate(
         allow_untrusted: bool = False,
         disk_device_key: Optional[int] = None,
         disk_path: Optional[str] = None,
-        read_only: bool = True) -> NfcAuthSession:
+        read_only: bool = True,
+        nfc_ssl: bool = True) -> NfcAuthSession:
     """Login to vSphere and complete NFC authd authentication for a VM.
 
     Args:
@@ -354,6 +380,8 @@ def authenticate(
         disk_path: Datastore path used to resolve ``disk_device_key``.
         read_only: When False, request a writable ``NfcRandomAccessOpenDisk``
             ticket.
+        nfc_ssl: When True (the default), complete authd with the NFCSSL
+            PROXY service used by nbdssl. Pass False for nbd.
     """
     si = connect_vim(
         host, username, password, port=port,
@@ -364,8 +392,8 @@ def authenticate(
             si, vm, disk_device_key=disk_device_key,
             disk_path=disk_path, read_only=read_only)
         authd_sock = connect_authd(
-            ticket, allow_untrusted=allow_untrusted)
+            ticket, allow_untrusted=allow_untrusted, nfc_ssl=nfc_ssl)
     except Exception:
         Disconnect(si)
         raise
-    return NfcAuthSession(si, ticket, authd_sock)
+    return NfcAuthSession(si, ticket, authd_sock, nfc_ssl=nfc_ssl)

@@ -60,7 +60,10 @@ class LabEnv:
     vmx_spec: str
     disk_path: str
 
-    def authenticate(self, read_only: bool = True) -> NfcAuthSession:
+    def authenticate(
+            self,
+            read_only: bool = True,
+            nfc_ssl: bool = True) -> NfcAuthSession:
         """Login to the lab vCenter and complete NFC authd for the temp VM."""
         return nfc_auth.authenticate(
             host=self.host,
@@ -70,7 +73,8 @@ class LabEnv:
             thumbprint=self.thumbprint,
             allow_untrusted=self.allow_untrusted,
             disk_path=None if read_only else self.disk_path,
-            read_only=read_only)
+            read_only=read_only,
+            nfc_ssl=nfc_ssl)
 
     def vixdisklib_connect_kwargs(
             self, extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -82,7 +86,7 @@ class LabEnv:
             "username": self.username,
             "password": self.password,
             "vmx_spec": self.vmx_spec,
-            "transport_modes": "nbd",
+            "transport_modes": "nbdssl",
             "read_only": False,
         }
         if extra:

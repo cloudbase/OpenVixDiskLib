@@ -70,13 +70,20 @@ def _parse_vm_moref(vmx_spec: Optional[str]) -> str:
     return vmx_spec
 
 
-def _require_nbd(transport_modes: Optional[str]) -> None:
+def _select_transport(transport_modes: Optional[str]) -> str:
+    """Return the first requested transport this replacement implements.
+
+    ``None`` defaults to ``nbdssl``. A colon-separated list (VDDK
+    style, for example ``file:nbdssl:nbd``) picks the first of
+    ``nbdssl`` or ``nbd``.
+    """
     if transport_modes is None:
-        return
-    modes = [m for m in transport_modes.split(":") if m]
-    if "nbd" not in modes:
-        raise NotImplementedError(
-            f"only nbd transport is supported, got {transport_modes!r}")
+        return "nbdssl"
+    for mode in transport_modes.split(":"):
+        if mode in ("nbdssl", "nbd"):
+            return mode
+    raise NotImplementedError(
+        f"supported transports are nbdssl and nbd, got {transport_modes!r}")
 
 
 class _Connection:
@@ -89,13 +96,15 @@ class _Connection:
             snapshot_ref: Optional[str],
             thumbprint: Optional[str],
             allow_untrusted: bool,
-            read_only: bool) -> None:
+            read_only: bool,
+            transport_mode: str) -> None:
         self.si = si
         self.vm_moref = vm_moref
         self.snapshot_ref = snapshot_ref
         self.thumbprint = thumbprint
         self.allow_untrusted = allow_untrusted
         self.read_only = read_only
+        self.transport_mode = transport_mode
 
 
 class _DiskHandle:
@@ -104,9 +113,11 @@ class _DiskHandle:
     def __init__(
             self,
             disk: nfc_open.NfcDisk,
-            authd_sock) -> None:
+            authd_sock,
+            transport_mode: str) -> None:
         self.disk = disk
         self.authd_sock = authd_sock
+        self.transport_mode = transport_mode
 
 
 class VixDiskLibHandle:
@@ -161,12 +172,11 @@ class VixDiskLibHandle:
 
     def get_transport_modes(self) -> list[str]:
         """Return the transport modes this replacement implements."""
-        return ["nbd"]
+        return ["nbdssl", "nbd"]
 
     def get_transport_mode(self, disk_handle: _DiskHandle) -> str:
         """Return the transport used for ``disk_handle``."""
-        del disk_handle
-        return "nbd"
+        return disk_handle.transport_mode
 
     @contextlib.contextmanager
     def connect(
@@ -196,12 +206,14 @@ class VixDiskLibHandle:
             vmx_spec: VM selector, ``moref=vm-…``.
             snapshot_ref: Snapshot moref; unused on the NFC ticket.
             read_only: When False, the disk may be opened for write.
-            transport_modes: ``nbd`` or a colon list that includes ``nbd``.
+            transport_modes: ``nbdssl``, ``nbd``, or a colon list. The
+                first supported mode is used; ``None`` defaults to
+                ``nbdssl``.
             port: HTTPS port, usually 443.
             allow_untrusted: Skip management TLS verification when True.
         """
         LOG.debug("Connecting VixDiskLib: %s", server_name)
-        _require_nbd(transport_modes)
+        transport_mode = _select_transport(transport_modes)
         vm_moref = _parse_vm_moref(vmx_spec)
         si = nfc_auth.connect_vim(
             server_name,
@@ -212,7 +224,8 @@ class VixDiskLibHandle:
             allow_untrusted=allow_untrusted or not thumbprint)
         conn = _Connection(
             si, vm_moref, snapshot_ref, thumbprint,
-            allow_untrusted or not thumbprint, read_only)
+            allow_untrusted or not thumbprint, read_only,
+            transport_mode)
         try:
             yield conn
         finally:
@@ -243,18 +256,20 @@ class VixDiskLibHandle:
                 "ConnectEx was read-only; cannot open for write")
 
         vm = vim.VirtualMachine(conn.vm_moref, conn.si._stub)
+        nfc_ssl = conn.transport_mode == "nbdssl"
         ticket = nfc_auth.get_nfc_ticket(
             conn.si, vm, read_only=read_only, disk_path=disk_path)
         authd_sock = nfc_auth.connect_authd(
-            ticket, allow_untrusted=conn.allow_untrusted)
-        session = nfc_auth.NfcAuthSession(conn.si, ticket, authd_sock)
+            ticket, allow_untrusted=conn.allow_untrusted, nfc_ssl=nfc_ssl)
+        session = nfc_auth.NfcAuthSession(
+            conn.si, ticket, authd_sock, nfc_ssl=nfc_ssl)
         try:
             disk = nfc_open.open_disk(
                 session, disk_path, read_only=read_only)
         except Exception:
             authd_sock.close()
             raise
-        handle = _DiskHandle(disk, authd_sock)
+        handle = _DiskHandle(disk, authd_sock, conn.transport_mode)
         try:
             yield handle
         finally:

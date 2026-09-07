@@ -9,9 +9,9 @@ NFC work can follow the same loop instead of rediscovering it.
 
 Scope so far: `VixDiskLib_ConnectEx` + `VixDiskLib_Open` +
 `VixDiskLib_Read` + `VixDiskLib_Write` against lab vCenter 8.0.1 /
-ESXi 8, transport `nbd`. Driver: `tests/integration/` (the session-scoped
-`lab` fixture creates a temporary empty VM with a 10 GiB disk and
-destroys it when the pytest session ends).
+ESXi 8, transports `nbd` and `nbdssl`. Driver: `tests/integration/` (the
+session-scoped `lab` fixture creates a temporary empty VM with a 10 GiB
+disk and destroys it when the pytest session ends).
 
 Rule from `AGENTS.md`: reuse pyVmomi for every public VIM operation.
 Only reimplement what pyVmomi does not expose.
@@ -254,6 +254,32 @@ single oversized write the way VDDK sends an oversized read. Details:
 `tests/integration/test_nfc_read_write.py` and the VDDK cross-check in
 `tests/integration/test_crosscheck.py`.
 
+## Step 11 — NBDSSL: second TLS after `PROXY vpxa-nfcssl`
+
+VDDK strings name `nbdssl`, `vpxa-nfcssl://`, and `ha-nfcssl`. The NFC
+ticket SOAP call is unchanged (`service` stays `vpxa-nfc`). Transport is
+an authd/client choice:
+
+1. Same `SESSION` / `BANNER` / `THUMBPRINT_SHA2 PlainText` as NBD.
+2. `PROXY vpxa-nfcssl` → `200 Connect ha-nfcssl`.
+3. A new TLS handshake on the **same TCP connection** (not TLS-in-TLS
+   and not `THUMBPRINT_SHA2 <sha256>`). The colon thumbprint is still
+   `501 Invalid arguments`.
+4. Classic NFC handshake type 43 still sends ASCII `PlainText`. I/O
+   framing is unchanged.
+
+Replay: `connect_authd(..., nfc_ssl=True)` plus
+`nfc_open.wrap_nfcssl_socket`. Sending NFC on the first authd
+`SSLSocket` after `ha-nfcssl` fails (`BAD_RECORD_TYPE`); sending
+plaintext NFC on the dup'd fd gets EOF. Dup + `wrap_socket` is the
+working subset. Proof: `tests/integration/test_nfc_open.py` (`nbdssl`)
+and `test_openvixdisklib.py` with `transport_modes="nbdssl"`.
+
+Native `VixDiskLib_ConnectEx(..., transport_modes="nbdssl")` through
+the old `VixDiskLibConnectParams` ctypes struct can still log nbdssl
+and then fall back to `vpxa-nfc` / `useSSL=0`. Do not treat that log
+line as a wire capture of NFCSSL.
+
 ## What to write down
 
 After a stage works:
@@ -278,5 +304,4 @@ Not yet reversed, same loop as above:
 - `NFC_DELTA_DISK`, CBT / `QueryAllocatedBlocks`
 - `VixDiskLib_GetInfo` capacity
 - Host-switch AIO messages
-- `useSSL=1` (second NFCSSL wrap)
 - Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`

@@ -3,10 +3,12 @@
 
 """VDDK-compatible NFC disk open, sector read, and sector write.
 
-After ``nfc_auth.connect_authd`` returns ``200 Connect``, VDDK stops using
-``SSL_write`` on the authd socket. ``THUMBPRINT_SHA2 PlainText`` means the
-NFC binary protocol runs as raw TCP on that same file descriptor
-(``useSSL=0``). This module dups that fd and speaks:
+After ``nfc_auth.connect_authd`` returns ``200 Connect``, NBD
+(``useSSL=0``) stops using ``SSL_write`` and speaks NFC as raw TCP on
+that file descriptor. NBDSSL (``useSSL=1``) starts a second TLS
+handshake on the same TCP connection (``200 Connect ha-nfcssl``) and
+speaks the same NFC frames as TLS application data. This module dups
+the authd fd and speaks:
 
 1. Classic 264-byte NFC messages (handshake, version, connection data,
    AIO session open).
@@ -24,7 +26,7 @@ import socket
 import ssl
 import struct
 
-from openvixdisklib.nfc_auth import NfcAuthSession
+from openvixdisklib.nfc_auth import NfcAuthSession, _ssl_client_context
 
 NFC_MSG_SIZE = 264
 NFC_AIO_MAGIC = 0xA100DA7A
@@ -93,6 +95,30 @@ def takeover_authd_socket(ssock: ssl.SSLSocket) -> socket.socket:
     return raw
 
 
+def wrap_nfcssl_socket(
+        ssock: ssl.SSLSocket,
+        server_hostname: str) -> ssl.SSLSocket:
+    """Start the second TLS session used by NBDSSL after PROXY.
+
+    After ``200 Connect ha-nfcssl``, authd TLS is finished and
+    ``ha-nfcssl`` expects a new ClientHello on the same TCP connection.
+    The fd is dup'd so the original authd ``SSLSocket`` can be closed
+    later without ``SSL_shutdown`` of this NFCSSL session.
+
+    Args:
+        ssock: The TLS socket from ``nfc_auth.connect_authd``.
+        server_hostname: Host name passed to ``SSLContext.wrap_socket``.
+    """
+    raw = takeover_authd_socket(ssock)
+    ssl_context = _ssl_client_context(verify=False)
+    try:
+        return ssl_context.wrap_socket(
+            raw, server_hostname=server_hostname)
+    except Exception:
+        raw.close()
+        raise
+
+
 def _recvn(sock: socket.socket, size: int) -> bytes:
     buf = bytearray()
     while len(buf) < size:
@@ -146,7 +172,7 @@ class NfcDisk:
         """Wrap an AIO session that already has ``path`` open.
 
         Args:
-            sock: Raw NFC socket after handshake.
+            sock: NFC socket after handshake (raw TCP for nbd, TLS for nbdssl).
             path: Datastore path that was opened.
             handle: Server file handle from OPEN_FILE.
             sector_size: Sector size from the OPEN_FILE reply.
@@ -401,7 +427,9 @@ def open_disk(
 
     Matches VDDK ``VixDiskLib_Open`` of a datastore path after the NFC
     ticket and authd PROXY handshake: session init, AIO open, then
-    ``NFC_AIO_MSG_OPEN_FILE`` with type ``NFC_DISK``.
+    ``NFC_AIO_MSG_OPEN_FILE`` with type ``NFC_DISK``. NBD dups the
+    authd fd and sends plaintext NFC. NBDSSL wraps that dup in a
+    second TLS session (``session.nfc_ssl``).
 
     Args:
         session: Result of ``nfc_auth.authenticate``.
@@ -412,7 +440,11 @@ def open_disk(
         version: Client NFC protocol version (lab ESXi answered 11).
         read_only: When True, open with VDDK's read-only NFC flags.
     """
-    sock = takeover_authd_socket(session.authd_sock)
+    if session.nfc_ssl:
+        sock = wrap_nfcssl_socket(
+            session.authd_sock, session.ticket.host)
+    else:
+        sock = takeover_authd_socket(session.authd_sock)
     try:
         _handshake(sock, client_name, op_id, version)
         disk = NfcDisk(sock, disk_path, handle=0, sector_size=NFC_SECTOR_SIZE)

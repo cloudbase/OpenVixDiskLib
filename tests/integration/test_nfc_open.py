@@ -3,15 +3,20 @@
 
 """Exercise NFC disk open and a one-sector write/read against the lab."""
 
+import pytest
+
 from openvixdisklib import nfc_open
 from tests.integration.base import LabEnv, SECTOR_SIZE, pattern_bytes
 
 
 class TestNfcOpen:
-    def test_open_disk_and_read_first_sector(self, lab: LabEnv) -> None:
+    @pytest.mark.parametrize(
+        "nfc_ssl", [True, False], ids=["nbdssl", "nbd"])
+    def test_open_disk_and_read_first_sector(
+            self, lab: LabEnv, nfc_ssl: bool) -> None:
         """Open the temp VMDK, write sector 0, and read it back."""
         expected = pattern_bytes(SECTOR_SIZE, b"NFC-OPEN-S0")
-        with lab.authenticate(read_only=False) as session:
+        with lab.authenticate(read_only=False, nfc_ssl=nfc_ssl) as session:
             with nfc_open.open_disk(
                     session, lab.disk_path, read_only=False) as disk:
                 assert disk.path == lab.disk_path
