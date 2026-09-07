@@ -3,7 +3,8 @@
 This document records how `NfcDisk.write` in
 `openvixdisklib/nfc_open.py` implements `VixDiskLib_Write` over NFC AIO.
 The request layout matches the captured `VixDiskLib_Read` IO message in
-`docs/nfc_read.md`. Open flags and the IO direction field were taken
+`docs/nfc_read.md` (write requests use the same fragment fields as
+read replies). Open flags and the IO direction field were taken
 from a `strace` of VDDK 8 writing one sector to a temporary 10 GiB
 disk (`docs/reverse_engineering_procedure.md`).
 
@@ -48,73 +49,65 @@ required to write or read sectors.
 ## Request (44 bytes + data)
 
 Little-endian, after the usual 16-byte AIO header
-(`magic 0xA100DA7A`, type 7, size 44, monotonic `opId`):
+(`magic 0xA100DA7A`, type 7, size 44, one `opId` per
+`VixDiskLib_Write`):
 
-| Offset | Type     | `Write(start, n)`                                  |
-| ------ | -------- | -------------------------------------------------- |
-| 0      | `uint64` | File handle from `OPEN_FILE`                       |
-| 8      | `uint64` | `0` (`NFC_AIO_IO_WRITE`; read uses `1`)            |
-| 16     | `uint64` | Byte offset                                        |
-| 24     | `uint64` | Byte length                                        |
-| 32     | `uint32` | Byte length (same value)                           |
-| 36     | `uint32` | Byte length (same value)                           |
-| 40     | `uint32` | `0`                                                |
+| Offset | Type     | `Write(start, n)`                                         |
+| ------ | -------- | --------------------------------------------------------- |
+| 0      | `uint64` | File handle from `OPEN_FILE`                              |
+| 8      | `uint64` | `0` (`NFC_AIO_IO_WRITE`; read uses `1`)                   |
+| 16     | `uint64` | Byte offset of the **whole** write                        |
+| 24     | `uint32` | Total byte length                                         |
+| 28     | `uint32` | Byte offset of this fragment (`0`, `65536`, …)            |
+| 32     | `uint32` | This fragment’s uncompressed length                       |
+| 36     | `uint32` | Extra size (same as 32, or FastLZ packed size)            |
+| 40     | `uint32` | `0`                                                       |
 
-FASTLZ writes use the same 44-byte header. The opcode `uint64` high
-half is `2`, offset 36 is the compressed size, and FastLZ bytes follow
-instead of raw sectors. If compression does not shrink the chunk, VDDK
-sends type `0` and raw extra (same as an uncompressed write).
+This is the same 44-byte layout as a **read reply** fragment
+(`docs/nfc_read.md`): writes stream request fragments, reads stream
+reply fragments. A single-fragment write (≤ 64 KiB) still looks like a
+`uint64` length at offset 24 because the fragment offset is 0.
+
+FASTLZ writes use the same header. The opcode `uint64` high half is
+`2`, offset 36 is the compressed size, and FastLZ bytes follow instead
+of raw sectors. If compression does not shrink the fragment, VDDK
+sends type `0` and raw extra. Each fragment is compressed on its own;
+a 32 MiB FastLZ write is 512 independent FastLZ extras, not one.
 
 Sector bytes follow the 44-byte payload and are **not** counted in AIO
-`size`. VDDK sends header + payload + data in one `write()`. The
-replacement does the same (`sendall` of those bytes together) and sets
-`TCP_NODELAY` on the NFC socket so a small FastLZ extra is not delayed
-behind Nagle / delayed ACK.
-
-The server replies with a type-7 header and a 44-byte payload for that
-`opId`. There is no extra data on the write reply (unlike reads).
+`size`. The replacement sends header + payload + extra in one
+`sendall` and sets `TCP_NODELAY` on the NFC socket so a small FastLZ
+extra is not delayed behind Nagle / delayed ACK. Captured VDDK often
+uses two `write()`s (`60` then `65536`) for a 64 KiB fragment and
+coalesces only a 512-byte tail (`572` = 16 + 44 + 512).
 
 A 1-sector VDDK write was 572 bytes on the wire: 16 + 44 + 512.
 
-## Client-side split
+## Fragments and the single reply
 
-`NfcAioInitSession` advertises a 64 KiB buffer and count 4. VDDK splits
-writes larger than 64 KiB into 64 KiB chunks (VDDK programming guide)
-and keeps several IOs in flight. The Python client does the same: IO
-requests of at most `NFC_AIO_BUFFER_SIZE` bytes, up to
-`NFC_AIO_BUFFER_COUNT` (4) outstanding `opId`s before waiting for a
-reply.
+`NfcAioInitSession` advertises a 64 KiB buffer. Extra per type-7
+message is at most that size. VDDK does **not** issue a new `opId` per
+chunk, and it does **not** coalesce separate `VixDiskLib_Write` calls
+(eight 8 KiB writes stayed eight IOs). One public write becomes N
+client type-7 messages with the **same** `opId`, then **one** 44-byte
+reply (no extra) after the last fragment:
 
-OPEN_SESSION is 16 zero bytes in both directions, so that count is a
-VDDK client default (`vixDiskLib.nfcAio.Session.BufCount`), not a
-server limit. Raising the client window on this lab (32 MiB writes,
-median of three samples) did not close the gap to VDDK:
+```
+C: type=7 opId=14 size=44  total=66048 dest=0     chunk=65536  + 65536 data
+C: type=7 opId=14 size=44  total=66048 dest=65536 chunk=512    + 512 data
+S: type=7 opId=14 size=44  total=66048 dest=0     chunk=66048
+```
 
-| Window | Plain write MiB/s | FastLZ write MiB/s |
-| ------ | ----------------- | ------------------ |
-| 4      | 13.1              | 16.5               |
-| 16     | 11.3 (noisy)      | 22.3               |
-| 32     | 13.5              | 22.8               |
-| 128    | 17.9              | 22.9               |
-| 512    | 16.9              | —                  |
+A 32 MiB write is 512 client fragments and one ACK. The Python client
+does the same. An earlier attempt that used a distinct `opId` per
+64 KiB chunk and a sliding window of 4–512 outstanding IOs was waiting
+for one reply per chunk; raising the window did not match VDDK
+throughput because VDDK pays one RTT per `Write`, not per fragment.
 
-FastLZ flattens by window 16. Window 512 (send the whole 32 MiB before
-reading replies) was slower than 256. `SET_SOCK_OPTS` of 12 zero bytes
-returns send/recv sizes `1675000` and a `uint32` flag `1`; requesting
-8 MiB buffers is echoed but did not help at window 128. The remaining
-VDDK FastLZ advantage (about 140–260 MiB/s vs ~23 MiB/s here) is not
-the outstanding-IO count.
-
-VDDK logs at `VixDiskLib_InitEx` spawn a Vmacore pool (`IO: 2`,
-`Min workers: 4`, `Max workers: 13`) and NFC AIO uses a thread context
-(`NfcAioInitThreadCtx`, “Schedule main processing from IO callback”).
-Those are process-wide / async completion threads, not extra NFC
-sockets or extra 64 KiB buffers. Sync `VixDiskLib_Write` can still
-compress and SSL-write on different threads. That may help plain TLS
-overlap; it does not explain most of the FastLZ gap (512 × FastLZ of
-64 KiB is tens of milliseconds). `aiomgr.numThreads` and
-`AsyncWriteImpl` workers are local disk AIO / on-disk compressed VMDKs,
-not NBD.
+`NfcAioFlushCoalescedWrites` is server-side (`nfcAioServer.c`), not a
+client merge of API writes. OPEN_SESSION is 16 zero bytes both ways, so
+the logged AIO buffer count of 4 is a VDDK client default
+(`vixDiskLib.nfcAio.Session.BufCount`), not a server cap.
 
 ## Python replacement
 

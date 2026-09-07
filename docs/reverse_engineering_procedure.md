@@ -248,13 +248,13 @@ the ticket switched from `NfcGetVmFiles` to `NfcRandomAccessOpenDisk`
 `NfcRandomAccessOpenDisk`). Integration tests create a temporary empty
 10 GiB VM for the run so writes cannot land on other lab disks.
 
-The Python client splits writes larger than 64 KiB into AIO chunks and
-keeps four in flight (VDDK's `NfcAioInitSession` buffer count). Larger
-windows were tried; they do not match VDDK throughput. Header and extra
-go in one `sendall`, with `TCP_NODELAY`. Details:
-`docs/nfc_write.md`. Proof: write then read in
-`tests/integration/test_nfc_read_write.py` and the VDDK cross-check in
-`tests/integration/test_crosscheck.py`.
+A write larger than 64 KiB is one AIO `opId` with several type-7
+request fragments (same layout as read *replies*: total length, then
+fragment offset / length) and a single 44-byte ACK. Separate
+`VixDiskLib_Write` calls are not coalesced. Header and extra go in one
+`sendall`, with `TCP_NODELAY`. Details: `docs/nfc_write.md`. Proof:
+write then read in `tests/integration/test_nfc_read_write.py` and the
+VDDK cross-check in `tests/integration/test_crosscheck.py`.
 
 ## Step 11 — NBDSSL: second TLS after `PROXY vpxa-nfcssl`
 

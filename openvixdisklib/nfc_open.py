@@ -34,12 +34,9 @@ NFC_AIO_MAGIC = 0xA100DA7A
 NFC_AIO_HDR_SIZE = 16
 NFC_SECTOR_SIZE = 512
 NFC_PROTOCOL_VERSION = 11
-# Max data bytes in one AIO IO reply fragment (NfcAioInitSession buffer).
+# Max data bytes in one AIO IO request/reply fragment
+# (NfcAioInitSession buffer).
 NFC_AIO_BUFFER_SIZE = 65536
-# Outstanding write IOs kept in flight. Matches VDDK's logged
-# ``NfcAioInitSession`` buffer count of 4. Larger depths were tried
-# (see ``docs/nfc_write.md``) and did not close the VDDK throughput gap.
-NFC_AIO_BUFFER_COUNT = 4
 
 # Classic NFC message types observed on the wire (uint32 at offset 0).
 NFC_MSG_SESSION_COMPLETE = 4
@@ -341,11 +338,10 @@ class NfcDisk:
             data: bytes) -> None:
         """Write ``num_sectors`` starting at ``start_sector``.
 
-        Matches ``VixDiskLib_Write``: one ``NFC_AIO_MSG_IO`` request per
-        chunk in byte units, with sector bytes sent after the 44-byte
-        payload. Chunks larger than the AIO buffer (64 KiB) are split.
-        Up to ``NFC_AIO_BUFFER_COUNT`` writes stay in flight. FASTLZ
-        open compresses each chunk when that shrinks it.
+        Matches ``VixDiskLib_Write``: one ``NFC_AIO_MSG_IO`` ``opId``
+        for the whole call. Chunks larger than the AIO buffer (64 KiB)
+        are extra fragments with that same ``opId``; the server replies
+        once. FASTLZ open compresses each fragment when that shrinks it.
 
         Args:
             start_sector: Sector offset from the start of the disk.
@@ -358,50 +354,42 @@ class NfcDisk:
         if len(data) != length:
             raise ValueError(
                 f"write data is {len(data)} bytes, need {length}")
-        max_sectors = NFC_AIO_BUFFER_SIZE // self.sector_size
-        offset_sectors = start_sector
-        remaining = data
-        pending: set[int] = set()
-        while remaining or pending:
-            while remaining and len(pending) < NFC_AIO_BUFFER_COUNT:
-                n_sectors = min(
-                    len(remaining) // self.sector_size, max_sectors)
-                chunk = remaining[:n_sectors * self.sector_size]
-                pending.add(self._send_write_chunk(offset_sectors, chunk))
-                offset_sectors += n_sectors
-                remaining = remaining[n_sectors * self.sector_size:]
-            if not pending:
-                break
-            rtype, rop, _body = self._aio_recv_reply()
-            if rtype != NFC_AIO_MSG_IO or rop not in pending:
-                raise NfcProtocolError(
-                    f"AIO IO write reply type={rtype} opId={rop}, "
-                    f"expected type={NFC_AIO_MSG_IO} opId in {pending}")
-            pending.remove(rop)
-
-    def _send_write_chunk(self, start_sector: int, data: bytes) -> int:
-        length = len(data)
-        offset = start_sector * self.sector_size
-        extra = data
-        ctype = NFC_COMPRESSION_NONE
-        extra_len = length
-        if self.compression == NFC_COMPRESSION_FASTLZ and length >= 16:
-            compressed = fastlz.compress(data)
-            if compressed and len(compressed) < length:
-                extra = compressed
-                ctype = NFC_COMPRESSION_FASTLZ
-                extra_len = len(compressed)
-        opcode = NFC_AIO_IO_WRITE | (ctype << 32)
-        payload = struct.pack(
-            "<QQQQIII",
-            self.handle,
-            opcode,
-            offset,
-            length,
-            length,
-            extra_len,
-            0)
-        return self._aio_send(NFC_AIO_MSG_IO, payload, extra)
+        disk_offset = start_sector * self.sector_size
+        op_id = self._next_op_id()
+        frag_offset = 0
+        while frag_offset < length:
+            chunk = data[frag_offset:frag_offset + NFC_AIO_BUFFER_SIZE]
+            extra = chunk
+            extra_len = len(chunk)
+            ctype = NFC_COMPRESSION_NONE
+            if (
+                    self.compression == NFC_COMPRESSION_FASTLZ
+                    and extra_len >= 16):
+                compressed = fastlz.compress(chunk)
+                if compressed and len(compressed) < extra_len:
+                    extra = compressed
+                    extra_len = len(compressed)
+                    ctype = NFC_COMPRESSION_FASTLZ
+            opcode = NFC_AIO_IO_WRITE | (ctype << 32)
+            payload = struct.pack(
+                "<QQQIIIII",
+                self.handle,
+                opcode,
+                disk_offset,
+                length,
+                frag_offset,
+                len(chunk),
+                extra_len,
+                0)
+            self._sock.sendall(
+                _pack_aio_hdr(NFC_AIO_MSG_IO, len(payload), op_id)
+                + payload + extra)
+            frag_offset += len(chunk)
+        rtype, rop, _body = self._aio_recv_reply()
+        if rtype != NFC_AIO_MSG_IO or rop != op_id:
+            raise NfcProtocolError(
+                f"AIO IO write reply type={rtype} opId={rop}, "
+                f"expected type={NFC_AIO_MSG_IO} opId={op_id}")
 
     def close(self) -> None:
         """Close the VMDK, the AIO session, and the classic NFC session."""
