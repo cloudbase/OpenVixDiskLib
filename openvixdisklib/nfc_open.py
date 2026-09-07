@@ -36,6 +36,8 @@ NFC_SECTOR_SIZE = 512
 NFC_PROTOCOL_VERSION = 11
 # Max data bytes in one AIO IO reply fragment (NfcAioInitSession buffer).
 NFC_AIO_BUFFER_SIZE = 65536
+# Outstanding write IOs VDDK keeps in flight (NfcAioInitSession count 4).
+NFC_AIO_BUFFER_COUNT = 4
 
 # Classic NFC message types observed on the wire (uint32 at offset 0).
 NFC_MSG_SESSION_COMPLETE = 4
@@ -99,6 +101,7 @@ def takeover_authd_socket(ssock: ssl.SSLSocket) -> socket.socket:
         proto=ssock.proto,
         fileno=os.dup(ssock.fileno()))
     raw.settimeout(timeout)
+    _enable_tcp_nodelay(raw)
     return raw
 
 
@@ -124,6 +127,11 @@ def wrap_nfcssl_socket(
     except Exception:
         raw.close()
         raise
+
+
+def _enable_tcp_nodelay(sock: socket.socket) -> None:
+    """Disable Nagle so a small AIO header is not held back from its extra."""
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 
 def _recvn(sock: socket.socket, size: int) -> bytes:
@@ -200,18 +208,19 @@ class NfcDisk:
         self._op_id += 1
         return op_id
 
-    def _aio_roundtrip(
+    def _aio_send(
             self,
             msg_type: int,
             payload: bytes,
-            extra: bytes = b"",
-            extra_recv: int = 0) -> bytes:
-        """Send one AIO request and return the reply payload (+ extra)."""
+            extra: bytes = b"") -> int:
+        """Send one AIO request (header, payload, and extra in one write)."""
         op_id = self._next_op_id()
         self._sock.sendall(
-            _pack_aio_hdr(msg_type, len(payload), op_id) + payload)
-        if extra:
-            self._sock.sendall(extra)
+            _pack_aio_hdr(msg_type, len(payload), op_id) + payload + extra)
+        return op_id
+
+    def _aio_recv_reply(self) -> tuple[int, int, bytes]:
+        """Read the next AIO reply. Returns ``(type, op_id, payload)``."""
         rhdr = _recvn(self._sock, NFC_AIO_HDR_SIZE)
         magic, rtype, rsize, rop = struct.unpack_from("<IIII", rhdr)
         if magic != NFC_AIO_MAGIC:
@@ -222,6 +231,17 @@ class NfcDisk:
         if rtype == NFC_AIO_MSG_ERROR:
             raise NfcProtocolError(
                 f"AIO error opId={rop} size={rsize} {body.hex()}")
+        return rtype, rop, body
+
+    def _aio_roundtrip(
+            self,
+            msg_type: int,
+            payload: bytes,
+            extra: bytes = b"",
+            extra_recv: int = 0) -> bytes:
+        """Send one AIO request and return the reply payload (+ extra)."""
+        op_id = self._aio_send(msg_type, payload, extra)
+        rtype, rop, body = self._aio_recv_reply()
         if rtype != msg_type or rop != op_id:
             raise NfcProtocolError(
                 f"AIO reply type={rtype} opId={rop}, "
@@ -322,7 +342,8 @@ class NfcDisk:
         Matches ``VixDiskLib_Write``: one ``NFC_AIO_MSG_IO`` request per
         chunk in byte units, with sector bytes sent after the 44-byte
         payload. Chunks larger than the AIO buffer (64 KiB) are split.
-        FASTLZ open compresses each chunk when that shrinks it.
+        Up to ``NFC_AIO_BUFFER_COUNT`` writes stay in flight. FASTLZ
+        open compresses each chunk when that shrinks it.
 
         Args:
             start_sector: Sector offset from the start of the disk.
@@ -338,19 +359,26 @@ class NfcDisk:
         max_sectors = NFC_AIO_BUFFER_SIZE // self.sector_size
         offset_sectors = start_sector
         remaining = data
-        while remaining:
-            n_sectors = min(len(remaining) // self.sector_size, max_sectors)
-            chunk = remaining[:n_sectors * self.sector_size]
-            self._write_once(offset_sectors, n_sectors, chunk)
-            offset_sectors += n_sectors
-            remaining = remaining[n_sectors * self.sector_size:]
+        pending: set[int] = set()
+        while remaining or pending:
+            while remaining and len(pending) < NFC_AIO_BUFFER_COUNT:
+                n_sectors = min(
+                    len(remaining) // self.sector_size, max_sectors)
+                chunk = remaining[:n_sectors * self.sector_size]
+                pending.add(self._send_write_chunk(offset_sectors, chunk))
+                offset_sectors += n_sectors
+                remaining = remaining[n_sectors * self.sector_size:]
+            if not pending:
+                break
+            rtype, rop, _body = self._aio_recv_reply()
+            if rtype != NFC_AIO_MSG_IO or rop not in pending:
+                raise NfcProtocolError(
+                    f"AIO IO write reply type={rtype} opId={rop}, "
+                    f"expected type={NFC_AIO_MSG_IO} opId in {pending}")
+            pending.remove(rop)
 
-    def _write_once(
-            self,
-            start_sector: int,
-            num_sectors: int,
-            data: bytes) -> None:
-        length = num_sectors * self.sector_size
+    def _send_write_chunk(self, start_sector: int, data: bytes) -> int:
+        length = len(data)
         offset = start_sector * self.sector_size
         extra = data
         ctype = NFC_COMPRESSION_NONE
@@ -371,7 +399,7 @@ class NfcDisk:
             length,
             extra_len,
             0)
-        self._aio_roundtrip(NFC_AIO_MSG_IO, payload, extra=extra)
+        return self._aio_send(NFC_AIO_MSG_IO, payload, extra)
 
     def close(self) -> None:
         """Close the VMDK, the AIO session, and the classic NFC session."""

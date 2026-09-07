@@ -67,7 +67,9 @@ sends type `0` and raw extra (same as an uncompressed write).
 
 Sector bytes follow the 44-byte payload and are **not** counted in AIO
 `size`. VDDK sends header + payload + data in one `write()`. The
-replacement may split that into two `sendall`s; TCP does not care.
+replacement does the same (`sendall` of those bytes together) and sets
+`TCP_NODELAY` on the NFC socket so a small FastLZ extra is not delayed
+behind Nagle / delayed ACK.
 
 The server replies with a type-7 header and a 44-byte payload for that
 `opId`. There is no extra data on the write reply (unlike reads).
@@ -76,10 +78,11 @@ A 1-sector VDDK write was 572 bytes on the wire: 16 + 44 + 512.
 
 ## Client-side split
 
-`NfcAioInitSession` advertises a 64 KiB buffer. VDDK splits writes
-larger than that into 64 KiB chunks (VDDK programming guide). The
-Python client does the same: several IO requests of at most
-`NFC_AIO_BUFFER_SIZE` bytes, each with its own `opId`.
+`NfcAioInitSession` advertises a 64 KiB buffer and count 4. VDDK splits
+writes larger than 64 KiB into 64 KiB chunks (VDDK programming guide)
+and keeps several IOs in flight. The Python client does the same: IO
+requests of at most `NFC_AIO_BUFFER_SIZE` bytes, up to
+`NFC_AIO_BUFFER_COUNT` outstanding `opId`s before waiting for a reply.
 
 ## Python replacement
 
