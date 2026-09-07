@@ -18,9 +18,9 @@ Implemented against vCenter 8 / ESXi 8. Default transport is `nbdssl`
 - `VixDiskLib_Read`
 - `VixDiskLib_Write`
 
-Not implemented: compression open flags, CBT / allocated-block
-queries, disk geometry (`DDB_GET`), encrypted disks, and direct ESXi
-`ha-nfc` without vCenter `vpxa-nfc`.
+Not implemented: compression open flags other than FastLZ, CBT /
+allocated-block queries, disk geometry (`DDB_GET`), encrypted disks,
+and direct ESXi `ha-nfc` without vCenter `vpxa-nfc`.
 
 ## Install
 
@@ -64,6 +64,7 @@ VDDK-shaped handle.
 | `openvixdisklib/openvixdisklib.py` | Drop-in handle (`connect` / `open` / `read` / `write`) |
 | `openvixdisklib/nfc_auth.py`       | VIM login, NFC ticket, authd on 902                    |
 | `openvixdisklib/nfc_open.py`       | Classic NFC handshake, AIO open, sector read/write     |
+| `openvixdisklib/fastlz.py`         | FastLZ for `VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`   |
 | `tests/integration/`               | Live pytest suite against a lab vCenter                |
 | `tests/perf/`                      | Throughput comparison of openvixdisklib vs VDDK        |
 | `tests/integration/vixdisklib.py`  | Native VDDK wrapper used only to cross-check           |

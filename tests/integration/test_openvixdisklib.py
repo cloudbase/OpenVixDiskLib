@@ -12,8 +12,12 @@ from tests.integration.base import (
 
 class TestOpenvixdisklib:
     @pytest.mark.parametrize("transport_mode", ["nbdssl", "nbd"])
+    @pytest.mark.parametrize(
+        "open_flags",
+        [0, vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ],
+        ids=["plain", "fastlz"])
     def test_write_and_read_sector_zero_and_one_gib(
-            self, lab: LabEnv, transport_mode: str) -> None:
+            self, lab: LabEnv, transport_mode: str, open_flags: int) -> None:
         """Write then read sector 0 and the sector at a 1 GiB offset."""
         handle = vixdisklib.VixDiskLibHandle(
             vixdisklib_compatibility_version="8.0",
@@ -30,7 +34,7 @@ class TestOpenvixdisklib:
         }
         assert handle.get_transport_modes() == ["nbdssl", "nbd"]
         with handle.connect(**connect_kwargs) as conn:
-            with handle.open(conn, lab.disk_path, flags=0) as disk:
+            with handle.open(conn, lab.disk_path, flags=open_flags) as disk:
                 assert handle.get_transport_mode(disk) == transport_mode
                 for start, expected in patterns.items():
                     write_buf[:SECTOR_SIZE] = expected

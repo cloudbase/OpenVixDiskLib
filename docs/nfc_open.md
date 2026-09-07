@@ -31,6 +31,7 @@ sectors. Flags `0x1a` require the writable ticket; the same flags on a
 | `NfcUtil_PrintFileInfoOpenFlag` `NFC_DISK` `0x1e`             | `NFC_AIO_MSG_OPEN_FILE` (read-only)                        |
 | Open without `VIXDISKLIB_FLAG_OPEN_READ_ONLY`                 | `OPEN_FILE` flags `0x1a` (read-write)                      |
 | `VixDiskLib_Read` / `VixDiskLib_Write`                        | `NFC_AIO_MSG_IO` + sector bytes                            |
+| `VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`                     | IO opcode high bits `2`; extra data is FastLZ              |
 
 `snapshot_ref` is still not on the wire. Integration tests pass the
 flat VMDK created with the temporary lab VM.
@@ -208,6 +209,7 @@ classic type 4 `NFC_SESSION_COMPLETE`.
 | VIM + authd                   | `openvixdisklib.nfc_auth.authenticate`          |
 | Dup fd, skip TLS for NFC      | `openvixdisklib.nfc_open.takeover_authd_socket` |
 | Second TLS for nbdssl         | `openvixdisklib.nfc_open.wrap_nfcssl_socket`    |
+| FastLZ for NBD compression    | `openvixdisklib.fastlz`                         |
 | Handshake + AIO + OPEN_FILE   | `openvixdisklib.nfc_open.open_disk`             |
 | Sector read / write / close   | `openvixdisklib.nfc_open.NfcDisk`               |
 
@@ -224,7 +226,7 @@ I/O: `docs/nfc_read.md`, `docs/nfc_write.md`, and
 
 ## What is still VDDK-only
 
-- `DDB_GET` / geometry / compression / encryption keys
+- `DDB_GET` / geometry / zlib and skipz compression / encryption keys
 - `NFC_DELTA_DISK`, change-block tracking
 - Host-switch (`NFC_AIO_SWITCH_HOST_*`)
 - Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`

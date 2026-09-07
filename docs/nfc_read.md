@@ -39,20 +39,39 @@ LBA 8 on this disk was 4096 zero bytes on the wire, not a skip.
 Little-endian, after the usual 16-byte AIO header
 (`magic 0xA100DA7A`, type 7, size 44, monotonic `opId`):
 
-| Offset | Type     | VDDK `Read(start, n)`                          |
-| ------ | -------- | ---------------------------------------------- |
-| 0      | `uint64` | File handle from `OPEN_FILE`                   |
-| 8      | `uint64` | `1` (`NFC_AIO_IO_READ`; write uses `0`)        |
-| 16     | `uint64` | Byte offset                                    |
-| 24     | `uint64` | Byte length                                    |
-| 32     | `uint32` | Byte length (same value)                       |
-| 36     | `uint32` | Byte length (same value)                       |
-| 40     | `uint32` | `0` (flags; uncompressed in this capture)      |
+| Offset | Type     | VDDK `Read(start, n)`                                      |
+| ------ | -------- | ---------------------------------------------------------- |
+| 0      | `uint64` | File handle from `OPEN_FILE`                               |
+| 8      | `uint64` | Direction in low 32 bits; FastLZ type `2` in high 32 bits  |
+| 16     | `uint64` | Byte offset                                                |
+| 24     | `uint64` | Byte length                                                |
+| 32     | `uint32` | Byte length (same value)                                   |
+| 36     | `uint32` | Byte length, or compressed extra size when type is FastLZ  |
+| 40     | `uint32` | `0`                                                        |
 
 An earlier guess that offset 36 was `NFC_DISK` (`2`) was wrong: a
 1-sector VDDK read puts `512` in both `uint32` length fields. A Python
 read that sent `(512, 2, 0)` still worked for one sector; the
 replacement now matches VDDK.
+
+`VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ` does not change OPEN_FILE
+flags. The IO opcode at offset 8 is a `uint64`: low 32 bits are still
+`0`/`1` (write/read), high 32 bits are the NFC compression type
+(`2` = FastLZ). OPEN still uses handshake `PlainText`.
+
+| Open flag / wire                         | Request extra                         | Reply extra                                      |
+| ---------------------------------------- | ------------------------------------- | ------------------------------------------------ |
+| No compression flag                      | Raw `length` bytes on write           | Raw fragment at offset 32                        |
+| FASTLZ, data that shrinks                | FastLZ bytes; offset 36 = packed size | Opcode type `2`; extra is FastLZ of offset 32    |
+| FASTLZ, incompressible                   | Raw bytes; opcode type `0`            | Opcode type `0`; extra is raw                    |
+
+Reads with FASTLZ always *request* type `2`. The server may answer type
+`2` or fall back to type `0`. Decompress into the uncompressed fragment
+length at offset 32 and copy to the dest at offset 28.
+
+64 KiB chunks use FastLZ level 2 (first byte has bit 5 set). Smaller
+chunks use level 1. VDDK’s URL form is `FASTLZ-vpxa-nfc://…`; authd
+`PROXY` is unchanged.
 
 ## Reply
 
@@ -117,7 +136,7 @@ fragments).
 
 ## What is still VDDK-only
 
-- Compression flags on the last `uint32`
+- zlib and skipz NBD compression flags
 - `VixDiskLib_ReadAsync` (same IO messages, different client threading)
 - `VixDiskLib_QueryAllocatedBlocks` / allocation bitmaps
 - `VixDiskLib_GetInfo` capacity (not required to read a known range)

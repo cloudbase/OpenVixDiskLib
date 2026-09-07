@@ -44,10 +44,24 @@ VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB = 16
 VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ = 32
 VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ = 64
 
-_COMPRESSION_FLAGS = (
-    VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB
-    | VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ
-    | VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ)
+
+def _nfc_compression(flags: int) -> int:
+    """Return the NFC IO compression type for VixDiskLib open ``flags``."""
+    alg = flags & (
+        VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB
+        | VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ
+        | VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ)
+    if alg == 0:
+        return nfc_open.NFC_COMPRESSION_NONE
+    if alg == VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ:
+        return nfc_open.NFC_COMPRESSION_FASTLZ
+    if alg & (alg - 1):
+        raise NotImplementedError(
+            "Cannot set two or more NBD compression algorithms at the "
+            "same time")
+    raise NotImplementedError(
+        f"NBD compression open flag 0x{alg:x} is not supported")
+
 
 VIX_SUPPORTED_COMPATIBILITY_MODES = [
     "6.0", "6.5", "6.7", "7.0", "8.0"]
@@ -243,13 +257,12 @@ class VixDiskLibHandle:
             conn: Connection from ``connect``.
             disk_path: Datastore path of the VMDK.
             flags: Open flags. ``VIXDISKLIB_FLAG_OPEN_READ_ONLY`` opens
-                the disk read-only; omit it for write. Compression flags
-                are not implemented.
+                the disk read-only; omit it for write.
+                ``VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`` compresses
+                NFC IO. zlib and skipz are not implemented.
         """
         LOG.debug("Openning VixDiskLib disk: %s", disk_path)
-        if flags & _COMPRESSION_FLAGS:
-            raise NotImplementedError(
-                "NBD compression open flags are not supported")
+        compression = _nfc_compression(flags)
         read_only = bool(flags & VIXDISKLIB_FLAG_OPEN_READ_ONLY)
         if not read_only and conn.read_only:
             raise NotImplementedError(
@@ -265,7 +278,8 @@ class VixDiskLibHandle:
             conn.si, ticket, authd_sock, nfc_ssl=nfc_ssl)
         try:
             disk = nfc_open.open_disk(
-                session, disk_path, read_only=read_only)
+                session, disk_path, read_only=read_only,
+                compression=compression)
         except Exception:
             authd_sock.close()
             raise

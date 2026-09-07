@@ -29,7 +29,8 @@ def _connect_extra(lab: LabEnv, module: Any) -> Optional[dict[str, Any]]:
 def _time_write_read(
         lab: LabEnv,
         module: Any,
-        payload: bytes) -> tuple[float, float]:
+        payload: bytes,
+        flags: int = 0) -> tuple[float, float]:
     """Write ``payload`` at sector 0, read it back, and return durations."""
     n_sectors = len(payload) // SECTOR_SIZE
     handle = module.VixDiskLibHandle(
@@ -40,7 +41,7 @@ def _time_write_read(
     write_buf[:len(payload)] = payload
     kwargs = lab.vixdisklib_connect_kwargs(_connect_extra(lab, module))
     with handle.connect(**kwargs) as conn:
-        with handle.open(conn, lab.disk_path, flags=0) as disk:
+        with handle.open(conn, lab.disk_path, flags=flags) as disk:
             started = time.perf_counter()
             handle.write(disk, 0, n_sectors, write_buf)
             write_s = time.perf_counter() - started
@@ -65,24 +66,33 @@ class TestCompare:
             ("vddk", vixdisklib),
             ("openvixdisklib", open_vix),
         )
-        rows: list[tuple[str, str, float, float, float, float]] = []
+        open_modes = (
+            ("plain", 0),
+            ("fastlz", vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ),
+        )
+        rows: list[tuple[str, str, str, float, float, float, float]] = []
         for label, nbytes in _SIZES:
             payload = pattern_bytes(nbytes, f"PERF-{label}-".encode())
-            for name, module in libraries:
-                write_s, read_s = _time_write_read(lab, module, payload)
-                rows.append((
-                    label,
-                    name,
-                    write_s,
-                    read_s,
-                    _mib_per_s(nbytes, write_s),
-                    _mib_per_s(nbytes, read_s),
-                ))
+            for mode_name, flags in open_modes:
+                for name, module in libraries:
+                    write_s, read_s = _time_write_read(
+                        lab, module, payload, flags=flags)
+                    rows.append((
+                        label,
+                        mode_name,
+                        name,
+                        write_s,
+                        read_s,
+                        _mib_per_s(nbytes, write_s),
+                        _mib_per_s(nbytes, read_s),
+                    ))
         print()
         print(
-            f"{'size':<14} {'library':<16} {'write_s':>10} {'read_s':>10} "
+            f"{'size':<14} {'flags':<8} {'library':<16} "
+            f"{'write_s':>10} {'read_s':>10} "
             f"{'write_MiB/s':>12} {'read_MiB/s':>12}")
-        for label, name, write_s, read_s, write_r, read_r in rows:
+        for label, mode_name, name, write_s, read_s, write_r, read_r in rows:
             print(
-                f"{label:<14} {name:<16} {write_s:10.3f} {read_s:10.3f} "
+                f"{label:<14} {mode_name:<8} {name:<16} "
+                f"{write_s:10.3f} {read_s:10.3f} "
                 f"{write_r:12.1f} {read_r:12.1f}")

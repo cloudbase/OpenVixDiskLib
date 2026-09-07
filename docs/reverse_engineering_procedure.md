@@ -280,6 +280,24 @@ the old `VixDiskLibConnectParams` ctypes struct can still log nbdssl
 and then fall back to `vpxa-nfc` / `useSSL=0`. Do not treat that log
 line as a wire capture of NFCSSL.
 
+## Step 12 — FASTLZ NBD compression
+
+`VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ` (`1 << 5`) is an IO codec,
+not an OPEN_FILE bit. Capture VDDK with that flag (NBD + the port-902
+`write`/`read` hook):
+
+- Handshake stays `PlainText`. `OPEN_FILE` flags stay `0x1a` / `0x1e`.
+- VDDK’s URL is `FASTLZ-vpxa-nfc://…`; `PROXY` is still `vpxa-nfc`.
+- IO opcode `uint64` = direction in the low half, compression type in
+  the high half (`2` = FastLZ). Offset 32 is uncompressed length;
+  offset 36 is compressed extra size when type is 2.
+- Incompressible chunks fall back to type `0` and raw extra.
+- 64 KiB chunks use FastLZ level 2; smaller chunks use level 1.
+
+Replay: `openvixdisklib/fastlz.py` plus `NfcDisk` compression on each
+IO. Proof: `tests/integration/test_nfc_read_write.py` (`fastlz`) and
+`tests/perf/test_compare.py`.
+
 ## What to write down
 
 After a stage works:
@@ -300,7 +318,7 @@ replacement library.
 
 Not yet reversed, same loop as above:
 
-- `DDB_GET` / disk geometry, compression, encrypted disks
+- `DDB_GET` / disk geometry, zlib/skipz compression, encrypted disks
 - `NFC_DELTA_DISK`, CBT / `QueryAllocatedBlocks`
 - `VixDiskLib_GetInfo` capacity
 - Host-switch AIO messages

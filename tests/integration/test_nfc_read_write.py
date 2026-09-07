@@ -5,6 +5,8 @@
 
 import os
 
+import pytest
+
 from openvixdisklib import nfc_open
 from tests.integration.base import LabEnv, SECTOR_SIZE, pattern_bytes
 
@@ -12,7 +14,12 @@ _32MIB = 32 * 1024 * 1024
 
 
 class TestNfcReadWrite:
-    def test_sector_writes_and_reads(self, lab: LabEnv) -> None:
+    @pytest.mark.parametrize(
+        "compression",
+        [nfc_open.NFC_COMPRESSION_NONE, nfc_open.NFC_COMPRESSION_FASTLZ],
+        ids=["plain", "fastlz"])
+    def test_sector_writes_and_reads(
+            self, lab: LabEnv, compression: int) -> None:
         """Write known patterns and read them back at several ranges."""
         ranges = [
             (0, 1),
@@ -25,7 +32,8 @@ class TestNfcReadWrite:
         ]
         with lab.authenticate(read_only=False) as session:
             with nfc_open.open_disk(
-                    session, lab.disk_path, read_only=False) as disk:
+                    session, lab.disk_path, read_only=False,
+                    compression=compression) as disk:
                 for start, n_sectors in ranges:
                     length = n_sectors * SECTOR_SIZE
                     seed = f"NFC-R{start}:{n_sectors}-".encode()
@@ -55,13 +63,19 @@ class TestNfcReadWrite:
                     big_got[SECTOR_SIZE:2 * SECTOR_SIZE]
                     == big_to_write[SECTOR_SIZE:2 * SECTOR_SIZE])
 
-    def test_write_and_read_32mb(self, lab: LabEnv) -> None:
+    @pytest.mark.parametrize(
+        "compression",
+        [nfc_open.NFC_COMPRESSION_NONE, nfc_open.NFC_COMPRESSION_FASTLZ],
+        ids=["plain", "fastlz"])
+    def test_write_and_read_32mb(
+            self, lab: LabEnv, compression: int) -> None:
         """Write 32 MiB (512 AIO chunks) and read it back in one request."""
         n_sectors = _32MIB // SECTOR_SIZE
         to_write = os.urandom(_32MIB)
         with lab.authenticate(read_only=False) as session:
             with nfc_open.open_disk(
-                    session, lab.disk_path, read_only=False) as disk:
+                    session, lab.disk_path, read_only=False,
+                    compression=compression) as disk:
                 disk.write(0, n_sectors, to_write)
                 got = disk.read(0, n_sectors)
                 assert got is not to_write

@@ -60,6 +60,11 @@ Little-endian, after the usual 16-byte AIO header
 | 36     | `uint32` | Byte length (same value)                           |
 | 40     | `uint32` | `0`                                                |
 
+FASTLZ writes use the same 44-byte header. The opcode `uint64` high
+half is `2`, offset 36 is the compressed size, and FastLZ bytes follow
+instead of raw sectors. If compression does not shrink the chunk, VDDK
+sends type `0` and raw extra (same as an uncompressed write).
+
 Sector bytes follow the 44-byte payload and are **not** counted in AIO
 `size`. VDDK sends header + payload + data in one `write()`. The
 replacement may split that into two `sendall`s; TCP does not care.
