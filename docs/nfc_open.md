@@ -209,7 +209,7 @@ classic type 4 `NFC_SESSION_COMPLETE`.
 | VIM + authd                   | `openvixdisklib.nfc_auth.authenticate`          |
 | Dup fd, skip TLS for NFC      | `openvixdisklib.nfc_open.takeover_authd_socket` |
 | Second TLS for nbdssl         | `openvixdisklib.nfc_open.wrap_nfcssl_socket`    |
-| FastLZ for NBD compression    | `openvixdisklib.fastlz`                         |
+| FastLZ for NBD compression    | `openvixdisklib.fastlz` (pip `pyfastlz`)        |
 | Handshake + AIO + OPEN_FILE   | `openvixdisklib.nfc_open.open_disk`             |
 | Sector read / write / close   | `openvixdisklib.nfc_open.NfcDisk`               |
 

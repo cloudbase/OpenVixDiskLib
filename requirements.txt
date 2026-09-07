@@ -1,4 +1,5 @@
 pbr
+pyfastlz
 pyOpenSSL
 pyVmomi>=7.0
 PyYAML

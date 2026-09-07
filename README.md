@@ -64,7 +64,7 @@ VDDK-shaped handle.
 | `openvixdisklib/openvixdisklib.py` | Drop-in handle (`connect` / `open` / `read` / `write`) |
 | `openvixdisklib/nfc_auth.py`       | VIM login, NFC ticket, authd on 902                    |
 | `openvixdisklib/nfc_open.py`       | Classic NFC handshake, AIO open, sector read/write     |
-| `openvixdisklib/fastlz.py`         | FastLZ for `VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`   |
+| `openvixdisklib/fastlz.py`         | FastLZ NFC adapter (pip `pyfastlz`)                    |
 | `tests/integration/`               | Live pytest suite against a lab vCenter                |
 | `tests/perf/`                      | Throughput comparison of openvixdisklib vs VDDK        |
 | `tests/integration/vixdisklib.py`  | Native VDDK wrapper used only to cross-check           |

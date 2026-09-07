@@ -294,8 +294,10 @@ not an OPEN_FILE bit. Capture VDDK with that flag (NBD + the port-902
 - Incompressible chunks fall back to type `0` and raw extra.
 - 64 KiB chunks use FastLZ level 2; smaller chunks use level 1.
 
-Replay: `openvixdisklib/fastlz.py` plus `NfcDisk` compression on each
-IO. Proof: `tests/integration/test_nfc_read_write.py` (`fastlz`) and
+Replay: pip `pyfastlz` via `openvixdisklib/fastlz.py` (NFC extra is
+raw FastLZ, without the wrapper's 4-byte length prefix) plus `NfcDisk`
+compression on each IO. Proof:
+`tests/integration/test_nfc_read_write.py` (`fastlz`) and
 `tests/perf/test_compare.py`.
 
 ## What to write down
