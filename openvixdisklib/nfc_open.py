@@ -36,7 +36,9 @@ NFC_SECTOR_SIZE = 512
 NFC_PROTOCOL_VERSION = 11
 # Max data bytes in one AIO IO reply fragment (NfcAioInitSession buffer).
 NFC_AIO_BUFFER_SIZE = 65536
-# Outstanding write IOs VDDK keeps in flight (NfcAioInitSession count 4).
+# Outstanding write IOs kept in flight. Matches VDDK's logged
+# ``NfcAioInitSession`` buffer count of 4. Larger depths were tried
+# (see ``docs/nfc_write.md``) and did not close the VDDK throughput gap.
 NFC_AIO_BUFFER_COUNT = 4
 
 # Classic NFC message types observed on the wire (uint32 at offset 0).

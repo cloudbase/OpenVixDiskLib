@@ -249,8 +249,9 @@ the ticket switched from `NfcGetVmFiles` to `NfcRandomAccessOpenDisk`
 10 GiB VM for the run so writes cannot land on other lab disks.
 
 The Python client splits writes larger than 64 KiB into AIO chunks and
-keeps up to four in flight (`NfcAioInitSession` buffer count). Header
-and extra go in one `sendall`, with `TCP_NODELAY`. Details:
+keeps four in flight (VDDK's `NfcAioInitSession` buffer count). Larger
+windows were tried; they do not match VDDK throughput. Header and extra
+go in one `sendall`, with `TCP_NODELAY`. Details:
 `docs/nfc_write.md`. Proof: write then read in
 `tests/integration/test_nfc_read_write.py` and the VDDK cross-check in
 `tests/integration/test_crosscheck.py`.

@@ -158,9 +158,10 @@ obtain a file handle or to read sector 0.
 
 ### OPEN_SESSION / sockopts / resource pool
 
-VDDK sends 16 zero bytes (`OPEN_SESSION`), 12 zero bytes
-(`SET_SOCK_OPTS`; server returns send/recv buffer sizes), then
-`uint32` 1 (`SET_RES_POOL`, log: “Setting Resource Pool(1)”).
+VDDK sends 16 zero bytes (`OPEN_SESSION`; server replies with 16 zeros),
+12 zero bytes (`SET_SOCK_OPTS`; server returns send/recv buffer sizes
+and a `uint32` flag), then `uint32` 1 (`SET_RES_POOL`, log: “Setting
+Resource Pool(1)”).
 
 ### OPEN_FILE
 

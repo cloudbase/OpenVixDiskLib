@@ -82,7 +82,39 @@ A 1-sector VDDK write was 572 bytes on the wire: 16 + 44 + 512.
 writes larger than 64 KiB into 64 KiB chunks (VDDK programming guide)
 and keeps several IOs in flight. The Python client does the same: IO
 requests of at most `NFC_AIO_BUFFER_SIZE` bytes, up to
-`NFC_AIO_BUFFER_COUNT` outstanding `opId`s before waiting for a reply.
+`NFC_AIO_BUFFER_COUNT` (4) outstanding `opId`s before waiting for a
+reply.
+
+OPEN_SESSION is 16 zero bytes in both directions, so that count is a
+VDDK client default (`vixDiskLib.nfcAio.Session.BufCount`), not a
+server limit. Raising the client window on this lab (32 MiB writes,
+median of three samples) did not close the gap to VDDK:
+
+| Window | Plain write MiB/s | FastLZ write MiB/s |
+| ------ | ----------------- | ------------------ |
+| 4      | 13.1              | 16.5               |
+| 16     | 11.3 (noisy)      | 22.3               |
+| 32     | 13.5              | 22.8               |
+| 128    | 17.9              | 22.9               |
+| 512    | 16.9              | —                  |
+
+FastLZ flattens by window 16. Window 512 (send the whole 32 MiB before
+reading replies) was slower than 256. `SET_SOCK_OPTS` of 12 zero bytes
+returns send/recv sizes `1675000` and a `uint32` flag `1`; requesting
+8 MiB buffers is echoed but did not help at window 128. The remaining
+VDDK FastLZ advantage (about 140–260 MiB/s vs ~23 MiB/s here) is not
+the outstanding-IO count.
+
+VDDK logs at `VixDiskLib_InitEx` spawn a Vmacore pool (`IO: 2`,
+`Min workers: 4`, `Max workers: 13`) and NFC AIO uses a thread context
+(`NfcAioInitThreadCtx`, “Schedule main processing from IO callback”).
+Those are process-wide / async completion threads, not extra NFC
+sockets or extra 64 KiB buffers. Sync `VixDiskLib_Write` can still
+compress and SSL-write on different threads. That may help plain TLS
+overlap; it does not explain most of the FastLZ gap (512 × FastLZ of
+64 KiB is tens of milliseconds). `aiomgr.numThreads` and
+`AsyncWriteImpl` workers are local disk AIO / on-disk compressed VMDKs,
+not NBD.
 
 ## Python replacement
 
