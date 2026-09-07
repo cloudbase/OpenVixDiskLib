@@ -1,0 +1,5 @@
+pbr
+pyOpenSSL
+pyVmomi>=7.0
+PyYAML
+requests

@@ -1,0 +1,11 @@
+line-length = 88
+target-version = "py312"
+
+[lint]
+# UP031: Allow percent formatting for now.
+# PIE790: Unnecessary `pass` statement - actually improves readability.
+# RUF100: Unused blanket `noqa` directive - used by other linters.
+# BLE001: we'll allow catching Exception for now.
+# RUF015: enforces next() to be used when getting the first item of a list,
+#         may be enabled at a later time.
+ignore = ["UP031", "PIE790", "RUF100", "BLE001", "RUF015"]
