@@ -3,6 +3,8 @@
 
 """Exercise NFC sector writes and reads against the lab vCenter."""
 
+import os
+
 from openvixdisklib import nfc_open
 from tests.integration.base import LabEnv, SECTOR_SIZE, pattern_bytes
 
@@ -56,7 +58,7 @@ class TestNfcReadWrite:
     def test_write_and_read_32mb(self, lab: LabEnv) -> None:
         """Write 32 MiB (512 AIO chunks) and read it back in one request."""
         n_sectors = _32MIB // SECTOR_SIZE
-        to_write = pattern_bytes(_32MIB, b"NFC-32MB")
+        to_write = os.urandom(_32MIB)
         with lab.authenticate(read_only=False) as session:
             with nfc_open.open_disk(
                     session, lab.disk_path, read_only=False) as disk:
