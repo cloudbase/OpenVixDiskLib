@@ -6,6 +6,8 @@
 from openvixdisklib import nfc_open
 from tests.integration.base import LabEnv, SECTOR_SIZE, pattern_bytes
 
+_32MIB = 32 * 1024 * 1024
+
 
 class TestNfcReadWrite:
     def test_sector_writes_and_reads(self, lab: LabEnv) -> None:
@@ -50,3 +52,16 @@ class TestNfcReadWrite:
                 assert (
                     big_got[SECTOR_SIZE:2 * SECTOR_SIZE]
                     == big_to_write[SECTOR_SIZE:2 * SECTOR_SIZE])
+
+    def test_write_and_read_32mb(self, lab: LabEnv) -> None:
+        """Write 32 MiB (512 AIO chunks) and read it back in one request."""
+        n_sectors = _32MIB // SECTOR_SIZE
+        to_write = pattern_bytes(_32MIB, b"NFC-32MB")
+        with lab.authenticate(read_only=False) as session:
+            with nfc_open.open_disk(
+                    session, lab.disk_path, read_only=False) as disk:
+                disk.write(0, n_sectors, to_write)
+                got = disk.read(0, n_sectors)
+                assert got is not to_write
+                assert len(got) == _32MIB
+                assert got == to_write
