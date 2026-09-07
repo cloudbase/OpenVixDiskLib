@@ -198,7 +198,9 @@ class NfcDisk:
 
         Matches ``VixDiskLib_Read``: one ``NFC_AIO_MSG_IO`` request in
         byte units. If the length exceeds the AIO buffer (64 KiB) the
-        server replies with several same-``opId`` fragments.
+        server replies with several same-``opId`` fragments, which are
+        placed by the fragment byte offset in the reply (they may arrive
+        out of order).
 
         Args:
             start_sector: Sector offset from the start of the disk.
@@ -220,8 +222,10 @@ class NfcDisk:
         op_id = self._next_op_id()
         self._sock.sendall(
             _pack_aio_hdr(NFC_AIO_MSG_IO, len(payload), op_id) + payload)
-        data = bytearray()
-        while len(data) < length:
+        data = bytearray(length)
+        filled = 0
+        seen: set[int] = set()
+        while filled < length:
             rhdr = _recvn(self._sock, NFC_AIO_HDR_SIZE)
             rtype, rsize, rop = _unpack_aio_hdr(rhdr)
             if rtype != NFC_AIO_MSG_IO or rop != op_id:
@@ -232,13 +236,20 @@ class NfcDisk:
             if rsize < 36:
                 raise NfcProtocolError(
                     f"AIO IO reply payload too short: {rsize}")
-            chunk_len = struct.unpack_from("<I", body, 32)[0]
-            remaining = length - len(data)
-            if chunk_len == 0 or chunk_len > remaining:
+            # Fragments may arrive out of order. Offset 28 is the byte
+            # offset of this chunk within the request (0, 65536, …),
+            # not a 0-based index.
+            dest, chunk_len = struct.unpack_from("<II", body, 28)
+            if (
+                    dest in seen
+                    or chunk_len == 0
+                    or dest + chunk_len > length):
                 raise NfcProtocolError(
-                    f"AIO IO chunk length {chunk_len} invalid, "
-                    f"remaining {remaining}")
-            data.extend(_recvn(self._sock, chunk_len))
+                    f"AIO IO chunk offset={dest} length={chunk_len} invalid, "
+                    f"request {length}")
+            seen.add(dest)
+            data[dest:dest + chunk_len] = _recvn(self._sock, chunk_len)
+            filled += chunk_len
         return bytes(data)
 
     def write(

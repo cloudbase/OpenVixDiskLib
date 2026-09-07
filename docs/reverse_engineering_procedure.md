@@ -227,7 +227,8 @@ What that comparison showed:
   VDDK repeats the byte length there.
 - Zeros on the wire are real transferred zeros, not a sparse skip.
 
-Replay: `NfcDisk.read` loops on fragments until `length` bytes arrive.
+Replay: `NfcDisk.read` places fragments at the byte offset in the
+reply (they may arrive out of order) until `length` bytes are filled.
 Proof: `tests/integration/test_nfc_read_write.py` writes a known pattern
 (including a 129-sector read that must assemble two fragments) and
 checks the bytes that came back.

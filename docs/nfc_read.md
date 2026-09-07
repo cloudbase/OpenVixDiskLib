@@ -67,27 +67,30 @@ Reply payload (handle is zeroed; lengths describe this fragment):
 | 8      | `uint64` | `1` (read)                                      |
 | 16     | `uint64` | Byte offset of the **request**                  |
 | 24     | `uint32` | Total request length                            |
-| 28     | `uint32` | Fragment index (`0`, `1`, …)                    |
+| 28     | `uint32` | Byte offset of this fragment (`0`, `65536`, …)  |
 | 32     | `uint32` | This fragment’s byte length                     |
 | 36     | `uint32` | Same as offset 32                               |
 | 40     | `uint32` | `0`                                             |
 
 When there is a single fragment, offsets 24–31 look like a `uint64`
-length (index is 0). The 129-sector capture shows why they are two
-`uint32`s: fragment 0 has `(66048, 0)` then chunk 65536; fragment 1
-has `(66048, 1)` then chunk 512.
+length (the fragment offset is 0). The 129-sector capture shows why
+they are two `uint32`s: fragment 0 has `(66048, 0)` then chunk 65536;
+fragment 1 has `(66048, 65536)` then chunk 512. `0x00010000` at offset
+28 is the byte offset, not a 0-based index.
 
 Read loop: receive fragments with that `opId` until the concatenated
 data length equals the request. Use the `uint32` at payload offset 32
-as the extra-data size for that fragment. Do not treat extra data as
-part of AIO `size` (that field stays 44).
+as the extra-data size for that fragment, and copy it to the byte
+offset at payload offset 28 — fragments are not always delivered in
+order. Do not treat extra data as part of AIO `size` (that field stays
+44).
 
 129-sector example (one client request, two server fragments):
 
 ```
 C: type=7 opId=18 size=44  offset=0 length=66048
-S: type=7 opId=18 size=44  index=0 chunk=65536  + 65536 data
-S: type=7 opId=18 size=44  index=1 chunk=512    + 512 data
+S: type=7 opId=18 size=44  dest=0     chunk=65536  + 65536 data
+S: type=7 opId=18 size=44  dest=65536 chunk=512    + 512 data
 ```
 
 ## Lab check
