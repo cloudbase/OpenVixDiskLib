@@ -253,6 +253,12 @@ class VixDiskLibHandle:
             flags: int = VIXDISKLIB_FLAG_OPEN_READ_ONLY) -> Iterator[_DiskHandle]:
         """Open ``disk_path`` over NFC. Matches ``VixDiskLib_Open``.
 
+        Read-only opens request ``NfcGetVmFiles`` (VM only). The VMDK
+        path, including a snapshot parent such as ``…-000007.vmdk``, is
+        sent on NFC ``OPEN_FILE``. Writable opens use
+        ``NfcRandomAccessOpenDisk`` and resolve a device key from the
+        disk's backing chain.
+
         Args:
             conn: Connection from ``connect``.
             disk_path: Datastore path of the VMDK.
@@ -271,7 +277,8 @@ class VixDiskLibHandle:
         vm = vim.VirtualMachine(conn.vm_moref, conn.si._stub)
         nfc_ssl = conn.transport_mode == "nbdssl"
         ticket = nfc_auth.get_nfc_ticket(
-            conn.si, vm, read_only=read_only, disk_path=disk_path)
+            conn.si, vm, read_only=read_only,
+            disk_path=None if read_only else disk_path)
         authd_sock = nfc_auth.connect_authd(
             ticket, allow_untrusted=conn.allow_untrusted, nfc_ssl=nfc_ssl)
         session = nfc_auth.NfcAuthSession(

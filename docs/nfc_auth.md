@@ -125,12 +125,12 @@ A disk-scoped **read** ticket also works and returns the same
 ```
 
 `diskDeviceKey` is `VirtualDisk.key` from `vm.config.hardware.device`
-(2000 for Hard disk 1). The replacement resolves it from the datastore
-path when `open` is given a VMDK rather than a key. That path may be
-the current leaf or a parent in `backing.parent` (snapshot deltas such
-as `…-000007.vmdk` after the VM has moved on to `…-000008.vmdk`). The
-ticket still uses the device key; `OPEN_FILE` then names the snapshot
-file.
+(2000 for Hard disk 1). Read-only `VixDiskLib_Open` does **not** send
+it: the drop-in uses `NfcGetVmFiles` and puts the VMDK path (leaf or
+snapshot parent) only on NFC `OPEN_FILE`. Writable `open` resolves a
+key from the datastore path, matching the current leaf or any parent
+in `backing.parent` (for example `…-000007.vmdk` after the VM has
+moved on to `…-000008.vmdk`).
 
 ### Return value: `vim.HostServiceTicket`
 
