@@ -64,6 +64,7 @@ VDDK-shaped handle.
 | `openvixdisklib/nfc_auth.py`       | VIM login, NFC ticket, authd on 902                    |
 | `openvixdisklib/nfc_open.py`       | Classic NFC handshake, AIO open, sector read/write     |
 | `tests/integration/`               | Live pytest suite against a lab vCenter                |
+| `tests/perf/`                      | Throughput comparison of openvixdisklib vs VDDK        |
 | `tests/integration/vixdisklib.py`  | Native VDDK wrapper used only to cross-check           |
 | `docs/`                            | Protocol notes and reverse-engineering steps           |
 
@@ -93,6 +94,13 @@ write known patterns and read them back.
 tox -e integration
 # or
 .venv/bin/pytest tests/integration
+```
+
+Compare write/read throughput of openvixdisklib and native VDDK
+(`64KiB`, 129-sector, and `32MiB` transfers):
+
+```bash
+tox -e perf
 ```
 
 VDDK cross-check tests skip when `libvixDiskLib` is not loadable from

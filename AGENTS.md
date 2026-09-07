@@ -8,7 +8,7 @@
   to retrieve VMware disk contents.
 - Integration tests under `tests/integration/` are a good starting point for
   interacting with the VMware NBD / NFC APIs. They take a session-scoped
-  `lab` fixture from `tests/integration/conftest.py` (credentials and VM
+  `lab` fixture from `tests/conftest.py` (credentials and VM
   settings in `tests.integration.base.LabEnv`). The fixture creates a
   temporary empty VM for the pytest session. We can make use of
   them to reverse engineer the VMware protocol, for example making various
@@ -41,7 +41,8 @@
   fixture creates one temporary empty VM with a 10 GiB disk for the whole
   run and destroys it at session end. Run them with
   `tox -e integration` or
-  `.venv/bin/pytest tests/integration`.
+  `.venv/bin/pytest tests/integration`. Throughput comparison against
+  native VDDK lives under `tests/perf/` (`tox -e perf`).
 
 
 ## Other rules
