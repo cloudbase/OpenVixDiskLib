@@ -99,7 +99,8 @@ tox -e integration
 ```
 
 Compare write/read throughput of openvixdisklib and native VDDK
-(`64KiB`, 129-sector, and `32MiB` transfers):
+(`64KiB`, 129-sector, and `32MiB` transfers; `nbdssl` and `nbd`;
+plain and FastLZ):
 
 ```bash
 tox -e perf
