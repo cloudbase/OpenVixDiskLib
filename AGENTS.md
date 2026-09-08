@@ -22,7 +22,13 @@
 - `docs/` contains various documents that describe the reverse engineered
   vmware APIs and resulting modules.
 - Use `docs/reverse_engineering_procedure.md` to best describe the steps that
-  were undertaken to reverse engineer the Vmware APIs.
+  were undertaken to reverse engineer the Vmware APIs. Make sure to cover the
+  tools that were used (e.g. tcpdump, strace), when and how Python pickled objects
+  were stored.
+- `docs/probing_samples` contains examples of scripts that were used for
+  reverse engineering purposes. The goal is to provide a better insight over
+  the reverse engineering procedure. Sanitize any sensitive information such
+  as credentials and ips.
 
 
 ## Architecture
