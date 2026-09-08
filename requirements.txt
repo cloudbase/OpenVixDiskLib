@@ -1,5 +1,7 @@
 pbr
-pyfastlz
+# TODO: consider vendorizing this library for security reasons. It's a fork of
+# an unmaintained repo, without much activity.
+pyfastlz==0.0.1
 pyOpenSSL
 pyVmomi>=7.0
 PyYAML
