@@ -4,16 +4,15 @@
 """Exercise native VDDK via tests.integration.vixdisklib against the lab."""
 
 from tests.integration import vixdisklib
-from tests.integration.base import LabEnv, SECTOR_SIZE, pattern_bytes
+from tests.integration.base import SECTOR_SIZE, LabEnv, pattern_bytes
 
 
 class TestVddk:
-    def test_write_and_read_first_sector(
-            self, lab: LabEnv, vddk: None) -> None:
+    def test_write_and_read_first_sector(self, lab: LabEnv, vddk: None) -> None:
         """Open the temp VMDK with VDDK, write sector 0, and read it back."""
         handle = vixdisklib.VixDiskLibHandle(
-            vixdisklib_compatibility_version="8.0",
-            config_path=None)
+            vixdisklib_compatibility_version="8.0", config_path=None
+        )
         write_buf = vixdisklib.get_buffer(SECTOR_SIZE)
         read_buf = vixdisklib.get_buffer(SECTOR_SIZE)
         expected = pattern_bytes(SECTOR_SIZE, b"VDDK-S0")

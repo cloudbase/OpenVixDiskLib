@@ -3,18 +3,24 @@
 
 """Exercise the VDDK-compatible openvixdisklib handle against the lab."""
 
+import pytest
 from pyVim.connect import Disconnect
 from pyVmomi import vim
-import pytest
 
 from openvixdisklib import openvixdisklib as vixdisklib
 from tests.integration.base import (
-    LabEnv, SECTOR_AT_1GB, SECTOR_SIZE, _connect_vim, _wait_for_task,
-    pattern_bytes)
+    SECTOR_AT_1GB,
+    SECTOR_SIZE,
+    LabEnv,
+    _connect_vim,
+    _wait_for_task,
+    pattern_bytes,
+)
 
 
 def _virtual_disk_backing(
-        vm: vim.VirtualMachine) -> vim.vm.device.VirtualDevice.BackingInfo:
+    vm: vim.VirtualMachine,
+) -> vim.vm.device.VirtualDevice.BackingInfo:
     """Return the lab VM's first virtual disk backing."""
     for device in vm.config.hardware.device:
         if isinstance(device, vim.vm.device.VirtualDisk):
@@ -27,19 +33,23 @@ class TestOpenvixdisklib:
     @pytest.mark.parametrize(
         "open_flags",
         [0, vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ],
-        ids=["plain", "fastlz"])
+        ids=["plain", "fastlz"],
+    )
     def test_write_and_read_sector_zero_and_one_gib(
-            self, lab: LabEnv, transport_mode: str, open_flags: int) -> None:
+        self, lab: LabEnv, transport_mode: str, open_flags: int
+    ) -> None:
         """Write then read sector 0 and the sector at a 1 GiB offset."""
         handle = vixdisklib.VixDiskLibHandle(
-            vixdisklib_compatibility_version="8.0",
-            config_path=None)
+            vixdisklib_compatibility_version="8.0", config_path=None
+        )
         write_buf = vixdisklib.get_buffer(SECTOR_SIZE)
         read_buf = vixdisklib.get_buffer(SECTOR_SIZE)
-        connect_kwargs = lab.vixdisklib_connect_kwargs({
-            "allow_untrusted": lab.allow_untrusted,
-            "transport_modes": transport_mode,
-        })
+        connect_kwargs = lab.vixdisklib_connect_kwargs(
+            {
+                "allow_untrusted": lab.allow_untrusted,
+                "transport_modes": transport_mode,
+            }
+        )
         patterns = {
             0: pattern_bytes(SECTOR_SIZE, b"OVDL-S0"),
             SECTOR_AT_1GB: pattern_bytes(SECTOR_SIZE, b"OVDL-1GB"),
@@ -63,19 +73,22 @@ class TestOpenvixdisklib:
         ``device.backing.fileName``; VDDK still opens it with a VM-only
         ticket and NFC ``OPEN_FILE``.
         """
-        handle = vixdisklib.VixDiskLibHandle(
-            vixdisklib_compatibility_version="8.0")
+        handle = vixdisklib.VixDiskLibHandle(vixdisklib_compatibility_version="8.0")
         expected = pattern_bytes(SECTOR_SIZE, b"OVDL-RO")
         write_buf = vixdisklib.get_buffer(SECTOR_SIZE)
         read_buf = vixdisklib.get_buffer(SECTOR_SIZE)
         write_buf[:SECTOR_SIZE] = expected
-        write_kwargs = lab.vixdisklib_connect_kwargs({
-            "allow_untrusted": lab.allow_untrusted,
-        })
-        read_kwargs = lab.vixdisklib_connect_kwargs({
-            "allow_untrusted": lab.allow_untrusted,
-            "read_only": True,
-        })
+        write_kwargs = lab.vixdisklib_connect_kwargs(
+            {
+                "allow_untrusted": lab.allow_untrusted,
+            }
+        )
+        read_kwargs = lab.vixdisklib_connect_kwargs(
+            {
+                "allow_untrusted": lab.allow_untrusted,
+                "read_only": True,
+            }
+        )
         read_flags = vixdisklib.VIXDISKLIB_FLAG_OPEN_READ_ONLY
 
         def read_sector(path: str) -> bytes:
@@ -92,12 +105,16 @@ class TestOpenvixdisklib:
         assert read_sector(lab.disk_path) == expected
 
         si = _connect_vim(
-            lab.host, lab.username, lab.password, lab.port,
-            lab.thumbprint, lab.allow_untrusted)
+            lab.host,
+            lab.username,
+            lab.password,
+            lab.port,
+            lab.thumbprint,
+            lab.allow_untrusted,
+        )
         try:
             vm = vim.VirtualMachine(lab.vm_moref, si._stub)
-            _wait_for_task(
-                vm.CreateSnapshot_Task("ovdl-readonly", "", False, False))
+            _wait_for_task(vm.CreateSnapshot_Task("ovdl-readonly", "", False, False))
             backing = _virtual_disk_backing(vm)
             parent = getattr(backing, "parent", None)
             assert parent is not None

@@ -34,8 +34,7 @@ VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB = 16
 VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ = 32
 VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ = 64
 
-VIX_SUPPORTED_COMPATIBILITY_MODES = [
-    "6.0", "6.5", "6.7", "7.0", "8.0"]
+VIX_SUPPORTED_COMPATIBILITY_MODES = ["6.0", "6.5", "6.7", "7.0", "8.0"]
 
 
 class VixDiskLibUidPasswdCreds(ctypes.Structure):
@@ -84,12 +83,10 @@ def get_buffer(size):
 
 
 class VixDiskLibHandle(object):
-    """ Class which acts as a proxy for vixDiskLib-related operations:
-    """
-    def __init__(
-            self, config_path=None, vixdisklib_compatibility_version=None):
-        self._vix_disklib = ctypes.cdll.LoadLibrary(
-            self.get_vix_disklib_name())
+    """Class which acts as a proxy for vixDiskLib-related operations:"""
+
+    def __init__(self, config_path=None, vixdisklib_compatibility_version=None):
+        self._vix_disklib = ctypes.cdll.LoadLibrary(self.get_vix_disklib_name())
         self._setup_vix_disklib()
 
         if config_path:
@@ -113,86 +110,119 @@ class VixDiskLibHandle(object):
                 raise ValueError(
                     "Unsupported vixDiskLib version format '%s'. vixDiskLib "
                     "compatibility mode must be of the form "
-                    "'$major.$minor'" % version) from ex
+                    "'$major.$minor'" % version
+                ) from ex
 
             try:
-                self._check_err(self._vix_disklib.VixDiskLib_InitEx(
-                    major_ver, minor_ver, None, None, None, None, config_path))
+                self._check_err(
+                    self._vix_disklib.VixDiskLib_InitEx(
+                        major_ver, minor_ver, None, None, None, None, config_path
+                    )
+                )
                 version_used = version
                 break
             except Exception:
                 LOG.debug(
                     "Failed to initialize vixDiskLib using compatibility "
                     "version '%s'. Trying next version. Error trace: %s",
-                    version, traceback.format_exc())
+                    version,
+                    traceback.format_exc(),
+                )
 
         if not version_used:
             raise Exception(
                 "Could not initialize vixDiskLib with any of the following "
-                "versions: %s" % target_versions)
+                "versions: %s" % target_versions
+            )
 
         LOG.info(
-            "Successfully initialized vixDiskLib with target version '%s'",
-            version_used)
+            "Successfully initialized vixDiskLib with target version '%s'", version_used
+        )
 
     @classmethod
     def get_vix_disklib_name(cls):
         vixDiskLibName = None
-        if os.name == 'nt':
-            vixDiskLibName = 'vixDiskLib.dll'
+        if os.name == "nt":
+            vixDiskLibName = "vixDiskLib.dll"
         else:
-            vixDiskLibName = 'libvixDiskLib.so'
+            vixDiskLibName = "libvixDiskLib.so"
         return vixDiskLibName
 
     def _setup_vix_disklib(self):
         self._vix_disklib.VixDiskLib_InitEx.argtypes = [
-            ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p,
-            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
         self._vix_disklib.VixDiskLib_InitEx.restype = ctypes.c_uint64
 
         self._vix_disklib.VixDiskLib_GetErrorText.argtypes = [
-            ctypes.c_uint64, ctypes.c_char_p]
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+        ]
         self._vix_disklib.VixDiskLib_GetErrorText.restype = ctypes.c_void_p
 
-        self._vix_disklib.VixDiskLib_FreeErrorText.arg_types = [
-            ctypes.c_char_p]
+        self._vix_disklib.VixDiskLib_FreeErrorText.arg_types = [ctypes.c_char_p]
         self._vix_disklib.VixDiskLib_FreeErrorText.restype = None
 
         self._vix_disklib.VixDiskLib_ListTransportModes.argtypes = []
-        self._vix_disklib.VixDiskLib_ListTransportModes.restype = (
-            ctypes.c_char_p)
+        self._vix_disklib.VixDiskLib_ListTransportModes.restype = ctypes.c_char_p
 
-        self._vix_disklib.VixDiskLib_GetTransportMode.argtypes = [
-            ctypes.c_void_p]
-        self._vix_disklib.VixDiskLib_GetTransportMode.restype = (
-            ctypes.c_char_p)
+        self._vix_disklib.VixDiskLib_GetTransportMode.argtypes = [ctypes.c_void_p]
+        self._vix_disklib.VixDiskLib_GetTransportMode.restype = ctypes.c_char_p
 
         self._vix_disklib.VixDiskLib_ConnectEx.argtypes = [
-            ctypes.POINTER(VixDiskLibConnectParams), ctypes.c_char,
-            ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+            ctypes.POINTER(VixDiskLibConnectParams),
+            ctypes.c_char,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
         self._vix_disklib.VixDiskLib_ConnectEx.restype = ctypes.c_uint64
 
         self._vix_disklib.VixDiskLib_Open.argtypes = [
-            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32,
-            ctypes.POINTER(ctypes.c_void_p)]
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
         self._vix_disklib.VixDiskLib_Open.restype = ctypes.c_uint64
 
         self._vix_disklib.VixDiskLib_Read.argtypes = [
-            ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_char_p]
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+        ]
         self._vix_disklib.VixDiskLib_Read.restype = ctypes.c_uint64
 
         self._vix_disklib.VixDiskLib_Write.argtypes = [
-            ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_char_p]
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+        ]
         self._vix_disklib.VixDiskLib_Write.restype = ctypes.c_uint64
 
         self._vix_disklib.VixDiskLib_GetMetadataKeys.argtypes = [
-            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint64,
-            ctypes.POINTER(ctypes.c_uint64)]
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
         self._vix_disklib.VixDiskLib_GetMetadataKeys.restype = ctypes.c_uint64
 
         self._vix_disklib.VixDiskLib_ReadMetadata.argtypes = [
-            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint64,
-            ctypes.POINTER(ctypes.c_uint64)]
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
         self._vix_disklib.VixDiskLib_ReadMetadata.restype = ctypes.c_uint64
 
         self._vix_disklib.VixDiskLib_Close.argtypes = [ctypes.c_void_p]
@@ -207,10 +237,10 @@ class VixDiskLibHandle(object):
     def _check_err(self, err, allowed_values=[vix_disklib_errors.VIX_OK]):
         if err not in allowed_values:
             err_msg = self._vix_disklib.VixDiskLib_GetErrorText(err, None)
-            err_msg_copy = str(ctypes.cast(
-                err_msg, ctypes.c_char_p).value.decode())
+            err_msg_copy = str(ctypes.cast(err_msg, ctypes.c_char_p).value.decode())
             self._vix_disklib.VixDiskLib_FreeErrorText(
-                ctypes.cast(err_msg, ctypes.c_char_p))
+                ctypes.cast(err_msg, ctypes.c_char_p)
+            )
 
             msg = None
             if err == vix_disklib_errors.VIX_E_OUT_OF_MEMORY:
@@ -220,7 +250,8 @@ class VixDiskLibHandle(object):
                     "by vCenter, so enough RAM to run the export is required "
                     "on all hosts. To force the export from the specific host "
                     "the VM is on, create a Coriolis endpoint with the DNS "
-                    "name/IP address of that host.")
+                    "name/IP address of that host."
+                )
             if err == vix_disklib_errors.VIX_E_HOST_NETWORK_CONN_REFUSED:
                 msg = (
                     "The ESXi host performing the CBT export refused "
@@ -231,7 +262,8 @@ class VixDiskLibHandle(object):
                     "facilitate this. Alternatively, try connecting Coriolis "
                     "directly to the specific ESXi host which is running the "
                     "VM(s) to be migrated by creating a Coriolis endpoint "
-                    "using the DNS name/IP address of the host itself.")
+                    "using the DNS name/IP address of the host itself."
+                )
 
             if err == vix_disklib_errors.VIX_E_CANNOT_CONNECT_TO_HOST:
                 msg = (
@@ -239,7 +271,8 @@ class VixDiskLibHandle(object):
                     "CBT export. If the Coriolis Endpoint connects to a "
                     "vSphere host, please try connecting Coriolis to the ESXi "
                     "host directly. If problem persists, try re-enabling CBT "
-                    "on the VM, or moving it to another ESXi host.")
+                    "on the VM, or moving it to another ESXi host."
+                )
 
             err_msg = err_msg_copy
             if msg:
@@ -250,7 +283,7 @@ class VixDiskLibHandle(object):
 
     def get_transport_modes(self):
         transport_modes = self._vix_disklib.VixDiskLib_ListTransportModes()
-        return transport_modes.decode().split(':')
+        return transport_modes.decode().split(":")
 
     def get_transport_mode(self, disk_handle):
         t_mode = self._vix_disklib.VixDiskLib_GetTransportMode(disk_handle)
@@ -258,9 +291,17 @@ class VixDiskLibHandle(object):
 
     @contextlib.contextmanager
     def connect(
-            self, server_name, thumbprint, username, password,
-            vmx_spec=None, snapshot_ref=None, read_only=True,
-            transport_modes=None, port=443):
+        self,
+        server_name,
+        thumbprint,
+        username,
+        password,
+        vmx_spec=None,
+        snapshot_ref=None,
+        read_only=True,
+        transport_modes=None,
+        port=443,
+    ):
         LOG.debug("Connecting VixDiskLib: %s", server_name)
 
         connectParams = VixDiskLibConnectParams()
@@ -283,9 +324,15 @@ class VixDiskLibHandle(object):
             snapshot_ref = snapshot_ref.encode()
 
         conn = ctypes.c_void_p()
-        self._check_err(self._vix_disklib.VixDiskLib_ConnectEx(
-            connectParams, read_only, snapshot_ref, transport_modes,
-            ctypes.byref(conn)))
+        self._check_err(
+            self._vix_disklib.VixDiskLib_ConnectEx(
+                connectParams,
+                read_only,
+                snapshot_ref,
+                transport_modes,
+                ctypes.byref(conn),
+            )
+        )
         try:
             yield conn
         finally:
@@ -296,21 +343,30 @@ class VixDiskLibHandle(object):
         LOG.debug("Openning VixDiskLib disk: %s", disk_path)
 
         disk_handle = ctypes.c_void_p()
-        self._check_err(self._vix_disklib.VixDiskLib_Open(
-            conn, disk_path.encode(), flags, ctypes.byref(disk_handle)))
+        self._check_err(
+            self._vix_disklib.VixDiskLib_Open(
+                conn, disk_path.encode(), flags, ctypes.byref(disk_handle)
+            )
+        )
         try:
             yield disk_handle
         finally:
             self.close(disk_handle)
 
     def read(self, disk_handle, start_sector, num_sectors, buf):
-        self._check_err(self._vix_disklib.VixDiskLib_Read(
-            disk_handle, start_sector, num_sectors, buf))
+        self._check_err(
+            self._vix_disklib.VixDiskLib_Read(
+                disk_handle, start_sector, num_sectors, buf
+            )
+        )
 
     def write(self, disk_handle, start_sector, num_sectors, buf):
         """Write ``num_sectors`` from ``buf`` starting at ``start_sector``."""
-        self._check_err(self._vix_disklib.VixDiskLib_Write(
-            disk_handle, start_sector, num_sectors, buf))
+        self._check_err(
+            self._vix_disklib.VixDiskLib_Write(
+                disk_handle, start_sector, num_sectors, buf
+            )
+        )
 
     def close(self, disk_handle):
         LOG.debug("Closing VixDiskLib disk handle: %s", disk_handle)

@@ -20,8 +20,7 @@ from pyVmomi import vim
 from openvixdisklib import nfc_auth
 from openvixdisklib.nfc_auth import NfcAuthSession
 
-_REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", ".."))
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _CONFIG_PATH = os.path.join(_REPO_ROOT, ".test_config.yaml")
 _CONFIG_KEYS = (
     "host",
@@ -61,9 +60,8 @@ class LabEnv:
     disk_path: str
 
     def authenticate(
-            self,
-            read_only: bool = True,
-            nfc_ssl: bool = True) -> NfcAuthSession:
+        self, read_only: bool = True, nfc_ssl: bool = True
+    ) -> NfcAuthSession:
         """Login to the lab vCenter and complete NFC authd for the temp VM."""
         return nfc_auth.authenticate(
             host=self.host,
@@ -74,10 +72,12 @@ class LabEnv:
             allow_untrusted=self.allow_untrusted,
             disk_path=None if read_only else self.disk_path,
             read_only=read_only,
-            nfc_ssl=nfc_ssl)
+            nfc_ssl=nfc_ssl,
+        )
 
     def vixdisklib_connect_kwargs(
-            self, extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        self, extra: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         """Return common ``VixDiskLib_ConnectEx`` arguments for the temp VM."""
         kwargs: dict[str, Any] = {
             "server_name": self.host,
@@ -107,7 +107,8 @@ def ensure_vddk_library_path() -> None:
     parts = [p for p in current.split(":") if p]
     if VDDK_DIR not in parts:
         os.environ["LD_LIBRARY_PATH"] = (
-            VDDK_DIR if not current else f"{VDDK_DIR}:{current}")
+            VDDK_DIR if not current else f"{VDDK_DIR}:{current}"
+        )
 
 
 def require_vddk() -> None:
@@ -123,13 +124,13 @@ def _load_test_config() -> dict[str, Any]:
     if not os.path.isfile(_CONFIG_PATH):
         pytest.skip(
             "integration tests need .test_config.yaml in the repo "
-            "root; see README.md for a sample")
+            "root; see README.md for a sample"
+        )
     with open(_CONFIG_PATH, encoding="utf-8") as config_file:
         data = yaml.safe_load(config_file) or {}
     missing = [key for key in _CONFIG_KEYS if key not in data]
     if missing:
-        raise RuntimeError(
-            f"{_CONFIG_PATH} is missing keys: {', '.join(missing)}")
+        raise RuntimeError(f"{_CONFIG_PATH} is missing keys: {', '.join(missing)}")
     return {
         "host": str(data["host"]),
         "port": int(data["port"]),
@@ -142,28 +143,28 @@ def _load_test_config() -> dict[str, Any]:
 
 
 def _connect_vim(
-        host: str,
-        username: str,
-        password: str,
-        port: int,
-        thumbprint: str,
-        allow_untrusted: bool) -> vim.ServiceInstance:
+    host: str,
+    username: str,
+    password: str,
+    port: int,
+    thumbprint: str,
+    allow_untrusted: bool,
+) -> vim.ServiceInstance:
     return nfc_auth.connect_vim(
         host,
         username,
         password,
         port=port,
         thumbprint=thumbprint,
-        allow_untrusted=allow_untrusted)
+        allow_untrusted=allow_untrusted,
+    )
 
 
 def _wait_for_task(task: vim.Task) -> Any:
     deadline = time.monotonic() + _TASK_TIMEOUT_S
-    while task.info.state in (
-            vim.TaskInfo.State.running, vim.TaskInfo.State.queued):
+    while task.info.state in (vim.TaskInfo.State.running, vim.TaskInfo.State.queued):
         if time.monotonic() > deadline:
-            raise TimeoutError(
-                f"timed out waiting for vSphere task {task}")
+            raise TimeoutError(f"timed out waiting for vSphere task {task}")
         time.sleep(_TASK_POLL_S)
     if task.info.state != vim.TaskInfo.State.success:
         raise RuntimeError(f"vSphere task failed: {task.info.error}")
@@ -171,26 +172,28 @@ def _wait_for_task(task: vim.Task) -> Any:
 
 
 def _find_datacenter(
-        content: vim.ServiceInstanceContent,
-        datacenter_name: str) -> vim.Datacenter:
+    content: vim.ServiceInstanceContent, datacenter_name: str
+) -> vim.Datacenter:
     matches = [
-        entity for entity in content.rootFolder.childEntity
-        if isinstance(entity, vim.Datacenter)
-        and entity.name == datacenter_name]
+        entity
+        for entity in content.rootFolder.childEntity
+        if isinstance(entity, vim.Datacenter) and entity.name == datacenter_name
+    ]
     if not matches:
         raise RuntimeError(f"datacenter {datacenter_name!r} not found")
     return matches[0]
 
 
-def _find_datastore(
-        datacenter: vim.Datacenter, datastore_name: str) -> vim.Datastore:
+def _find_datastore(datacenter: vim.Datacenter, datastore_name: str) -> vim.Datastore:
     matches = [
-        datastore for datastore in datacenter.datastore
-        if datastore.name == datastore_name]
+        datastore
+        for datastore in datacenter.datastore
+        if datastore.name == datastore_name
+    ]
     if not matches:
         raise RuntimeError(
-            f"datastore {datastore_name!r} not found in "
-            f"datacenter {datacenter.name!r}")
+            f"datastore {datastore_name!r} not found in datacenter {datacenter.name!r}"
+        )
     return matches[0]
 
 
@@ -200,17 +203,14 @@ def _vm_config_spec(vm_name: str, datastore_name: str) -> vim.vm.ConfigSpec:
     config.guestId = "otherGuest64"
     config.memoryMB = 128
     config.numCPUs = 1
-    config.files = vim.vm.FileInfo(
-        vmPathName=f"[{datastore_name}]")
+    config.files = vim.vm.FileInfo(vmPathName=f"[{datastore_name}]")
 
     controller = vim.vm.device.ParaVirtualSCSIController()
     controller.key = 1000
     controller.busNumber = 0
-    controller.sharedBus = (
-        vim.vm.device.VirtualSCSIController.Sharing.noSharing)
+    controller.sharedBus = vim.vm.device.VirtualSCSIController.Sharing.noSharing
     controller_spec = vim.vm.device.VirtualDeviceSpec()
-    controller_spec.operation = (
-        vim.vm.device.VirtualDeviceSpec.Operation.add)
+    controller_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
     controller_spec.device = controller
 
     backing = vim.vm.device.VirtualDisk.FlatVer2BackingInfo()
@@ -225,8 +225,7 @@ def _vm_config_spec(vm_name: str, datastore_name: str) -> vim.vm.ConfigSpec:
     disk.backing = backing
     disk_spec = vim.vm.device.VirtualDeviceSpec()
     disk_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
-    disk_spec.fileOperation = (
-        vim.vm.device.VirtualDeviceSpec.FileOperation.create)
+    disk_spec.fileOperation = vim.vm.device.VirtualDeviceSpec.FileOperation.create
     disk_spec.device = disk
 
     config.deviceChange = [controller_spec, disk_spec]
@@ -238,8 +237,13 @@ def create_lab_vm() -> LabEnv:
     cfg = _load_test_config()
     thumbprint = nfc_auth.get_ssl_cert_thumbprint(cfg["host"], cfg["port"])
     si = _connect_vim(
-        cfg["host"], cfg["username"], cfg["password"], cfg["port"],
-        thumbprint, cfg["allow_untrusted"])
+        cfg["host"],
+        cfg["username"],
+        cfg["password"],
+        cfg["port"],
+        thumbprint,
+        cfg["allow_untrusted"],
+    )
     vm = None
     try:
         content = si.RetrieveContent()
@@ -247,22 +251,23 @@ def create_lab_vm() -> LabEnv:
         datastore = _find_datastore(datacenter, cfg["datastore"])
         if not datastore.host:
             raise RuntimeError(
-                f"datastore {cfg['datastore']!r} is not mounted on any host")
+                f"datastore {cfg['datastore']!r} is not mounted on any host"
+            )
         host = datastore.host[0].key
         pool = host.parent.resourcePool
         vm_name = _LAB_VM_PREFIX + uuid.uuid4().hex[:12]
         vm = _wait_for_task(
             datacenter.vmFolder.CreateVM_Task(
-                config=_vm_config_spec(vm_name, datastore.name),
-                pool=pool,
-                host=host))
+                config=_vm_config_spec(vm_name, datastore.name), pool=pool, host=host
+            )
+        )
         disks = [
             device.backing.fileName
             for device in vm.config.hardware.device
-            if isinstance(device, vim.vm.device.VirtualDisk)]
+            if isinstance(device, vim.vm.device.VirtualDisk)
+        ]
         if not disks:
-            raise RuntimeError(
-                f"temporary VM {vm_name!r} has no virtual disks")
+            raise RuntimeError(f"temporary VM {vm_name!r} has no virtual disks")
         return LabEnv(
             host=cfg["host"],
             port=cfg["port"],
@@ -274,7 +279,8 @@ def create_lab_vm() -> LabEnv:
             thumbprint=thumbprint,
             vm_moref=vm._moId,
             vmx_spec=f"moref={vm._moId}",
-            disk_path=disks[0])
+            disk_path=disks[0],
+        )
     except Exception:
         if vm is not None:
             try:
@@ -289,8 +295,13 @@ def create_lab_vm() -> LabEnv:
 def destroy_lab_vm(lab: LabEnv) -> None:
     """Power off and delete the temporary lab VM if it still exists."""
     si = _connect_vim(
-        lab.host, lab.username, lab.password, lab.port,
-        lab.thumbprint, lab.allow_untrusted)
+        lab.host,
+        lab.username,
+        lab.password,
+        lab.port,
+        lab.thumbprint,
+        lab.allow_untrusted,
+    )
     try:
         vm = vim.VirtualMachine(lab.vm_moref, si._stub)
         try:

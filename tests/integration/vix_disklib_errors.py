@@ -534,5 +534,5 @@ VIX_ERROR_CODE_MAP = {
     VIX_E_NET_HTTP_TOO_MANY_REDIRECTS: "Reached the maximum number of redirects.",
     VIX_E_NET_HTTP_TRANSFER: "Failure sending/receiving network data.",
     VIX_E_NET_HTTP_SSL_SECURITY: "An SSL error occurred.",
-    VIX_E_NET_HTTP_GENERIC: "A generic HTTP error occurred."
+    VIX_E_NET_HTTP_GENERIC: "A generic HTTP error occurred.",
 }

@@ -9,8 +9,7 @@ import pytest
 
 from openvixdisklib import openvixdisklib as open_vix
 from tests.integration import vixdisklib
-from tests.integration.base import (
-    LabEnv, SECTOR_AT_1GB, SECTOR_SIZE, pattern_bytes)
+from tests.integration.base import SECTOR_AT_1GB, SECTOR_SIZE, LabEnv, pattern_bytes
 
 
 def _connect_extra(lab: LabEnv, module: Any) -> Optional[dict[str, Any]]:
@@ -21,14 +20,12 @@ def _connect_extra(lab: LabEnv, module: Any) -> Optional[dict[str, Any]]:
 
 
 def _write_sectors(
-        lab: LabEnv,
-        module: Any,
-        payloads: dict[int, bytes],
-        flags: int = 0) -> None:
+    lab: LabEnv, module: Any, payloads: dict[int, bytes], flags: int = 0
+) -> None:
     """Write one sector at each index using a vixdisklib-compatible module."""
     handle = module.VixDiskLibHandle(
-        vixdisklib_compatibility_version="8.0",
-        config_path=None)
+        vixdisklib_compatibility_version="8.0", config_path=None
+    )
     buf = module.get_buffer(SECTOR_SIZE)
     kwargs = lab.vixdisklib_connect_kwargs(_connect_extra(lab, module))
     with handle.connect(**kwargs) as conn:
@@ -39,14 +36,12 @@ def _write_sectors(
 
 
 def _read_sectors(
-        lab: LabEnv,
-        module: Any,
-        sectors: tuple[int, ...],
-        flags: int = 0) -> dict[int, bytes]:
+    lab: LabEnv, module: Any, sectors: tuple[int, ...], flags: int = 0
+) -> dict[int, bytes]:
     """Read one sector at each index using a vixdisklib-compatible module."""
     handle = module.VixDiskLibHandle(
-        vixdisklib_compatibility_version="8.0",
-        config_path=None)
+        vixdisklib_compatibility_version="8.0", config_path=None
+    )
     buf = module.get_buffer(SECTOR_SIZE)
     result: dict[int, bytes] = {}
     kwargs = lab.vixdisklib_connect_kwargs(_connect_extra(lab, module))
@@ -60,26 +55,26 @@ def _read_sectors(
 
 
 def _assert_both_read(
-        lab: LabEnv,
-        sectors: tuple[int, ...],
-        expected: dict[int, bytes],
-        flags: int = 0) -> None:
+    lab: LabEnv, sectors: tuple[int, ...], expected: dict[int, bytes], flags: int = 0
+) -> None:
     vddk_data = _read_sectors(lab, vixdisklib, sectors, flags=flags)
     replacement = _read_sectors(lab, open_vix, sectors, flags=flags)
     for start in sectors:
-        assert vddk_data[start] == expected[start], (
-            f"VDDK mismatch at sector {start}")
+        assert vddk_data[start] == expected[start], f"VDDK mismatch at sector {start}"
         assert replacement[start] == expected[start], (
-            f"openvixdisklib mismatch at sector {start}")
+            f"openvixdisklib mismatch at sector {start}"
+        )
 
 
 class TestCrosscheck:
     @pytest.mark.parametrize(
         "open_flags",
         [0, vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ],
-        ids=["plain", "fastlz"])
+        ids=["plain", "fastlz"],
+    )
     def test_openvixdisklib_matches_vddk_sectors(
-            self, lab: LabEnv, vddk: None, open_flags: int) -> None:
+        self, lab: LabEnv, vddk: None, open_flags: int
+    ) -> None:
         """Writes from either library must be visible to both readers."""
         sectors = (0, 1, SECTOR_AT_1GB)
         vddk_payloads = {

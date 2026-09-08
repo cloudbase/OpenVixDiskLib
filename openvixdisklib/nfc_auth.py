@@ -24,7 +24,7 @@ from typing import Optional
 
 from pyVim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
-from pyVmomi.VmomiSupport import CreateManagedType, F_OPTIONAL, GetVmodlType
+from pyVmomi.VmomiSupport import F_OPTIONAL, CreateManagedType, GetVmodlType
 
 NFC_SERVICE_MOID = "nfcService"
 AUTHD_DEFAULT_PORT = 902
@@ -59,28 +59,62 @@ def _register_nfc_types() -> None:
         "vim.version.version1",
         [],
         [
-            ("getVmFiles", "NfcGetVmFiles", "vim.version.version1",
-             (("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),),
-             (0, "vim.HostServiceTicket", "vim.HostServiceTicket"), None, None),
-            ("randomAccessOpen", "NfcRandomAccessOpenDisk",
-             "vim.version.version1",
-             (("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),
-              ("diskDeviceKey", "int", "vim.version.version1", 0, None),
-              ("hostForAccess", "vim.HostSystem", "vim.version.version1",
-               F_OPTIONAL, None),),
-             (0, "vim.HostServiceTicket", "vim.HostServiceTicket"), None, None),
-            ("randomAccessOpenReadonly", "NfcRandomAccessOpenReadonly",
-             "vim.version.version1",
-             (("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),
-              ("diskDeviceKey", "int", "vim.version.version1", 0, None),
-              ("hostForAccess", "vim.HostSystem", "vim.version.version1",
-               F_OPTIONAL, None),),
-             (0, "vim.HostServiceTicket", "vim.HostServiceTicket"), None, None),
-            ("getServerNfcLibVersion", "NfcGetServerNfcLibVersion",
-             "vim.version.version1",
-             (("hostForAccess", "vim.HostSystem", "vim.version.version1",
-               0, None),),
-             (0, "int", "int"), None, None),
+            (
+                "getVmFiles",
+                "NfcGetVmFiles",
+                "vim.version.version1",
+                (("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),),
+                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),
+                None,
+                None,
+            ),
+            (
+                "randomAccessOpen",
+                "NfcRandomAccessOpenDisk",
+                "vim.version.version1",
+                (
+                    ("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),
+                    ("diskDeviceKey", "int", "vim.version.version1", 0, None),
+                    (
+                        "hostForAccess",
+                        "vim.HostSystem",
+                        "vim.version.version1",
+                        F_OPTIONAL,
+                        None,
+                    ),
+                ),
+                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),
+                None,
+                None,
+            ),
+            (
+                "randomAccessOpenReadonly",
+                "NfcRandomAccessOpenReadonly",
+                "vim.version.version1",
+                (
+                    ("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),
+                    ("diskDeviceKey", "int", "vim.version.version1", 0, None),
+                    (
+                        "hostForAccess",
+                        "vim.HostSystem",
+                        "vim.version.version1",
+                        F_OPTIONAL,
+                        None,
+                    ),
+                ),
+                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),
+                None,
+                None,
+            ),
+            (
+                "getServerNfcLibVersion",
+                "NfcGetServerNfcLibVersion",
+                "vim.version.version1",
+                (("hostForAccess", "vim.HostSystem", "vim.version.version1", 0, None),),
+                (0, "int", "int"),
+                None,
+                None,
+            ),
         ],
     )
     _NFC_TYPES_REGISTERED = True
@@ -98,12 +132,13 @@ def nfc_service(si: vim.ServiceInstance) -> vim.NfcService:
 
 
 def connect_vim(
-        host: str,
-        username: str,
-        password: str,
-        port: int = 443,
-        thumbprint: Optional[str] = None,
-        allow_untrusted: bool = False) -> vim.ServiceInstance:
+    host: str,
+    username: str,
+    password: str,
+    port: int = 443,
+    thumbprint: Optional[str] = None,
+    allow_untrusted: bool = False,
+) -> vim.ServiceInstance:
     """Login to vCenter or ESXi using pyVim.connect.SmartConnect.
 
     Args:
@@ -124,7 +159,8 @@ def connect_vim(
         port=port,
         thumbprint=thumbprint,
         sslContext=ssl_context,
-        disableSslCertValidation=allow_untrusted)
+        disableSslCertValidation=allow_untrusted,
+    )
 
 
 def _virtual_disk_key(vm: vim.VirtualMachine, disk_path: str) -> int:
@@ -144,17 +180,17 @@ def _virtual_disk_key(vm: vim.VirtualMachine, disk_path: str) -> int:
             if getattr(backing, "fileName", None) == disk_path:
                 return device.key
             backing = getattr(backing, "parent", None)
-    raise ValueError(
-        f"VMDK path {disk_path!r} is not attached to {vm._moId}")
+    raise ValueError(f"VMDK path {disk_path!r} is not attached to {vm._moId}")
 
 
 def get_nfc_ticket(
-        si: vim.ServiceInstance,
-        vm: vim.VirtualMachine,
-        disk_device_key: Optional[int] = None,
-        host_for_access: Optional[vim.HostSystem] = None,
-        read_only: bool = True,
-        disk_path: Optional[str] = None) -> vim.HostServiceTicket:
+    si: vim.ServiceInstance,
+    vm: vim.VirtualMachine,
+    disk_device_key: Optional[int] = None,
+    host_for_access: Optional[vim.HostSystem] = None,
+    read_only: bool = True,
+    disk_path: Optional[str] = None,
+) -> vim.HostServiceTicket:
     """Return a one-time NFC HostServiceTicket for ``vm``.
 
     Matches VDDK: ``NfcGetVmFiles`` when only the VM is known (read-only),
@@ -174,14 +210,12 @@ def get_nfc_ticket(
         return nfc.GetVmFiles(vm)
     if disk_device_key is None:
         if disk_path is None:
-            raise ValueError(
-                "writable NFC tickets need disk_path or disk_device_key")
+            raise ValueError("writable NFC tickets need disk_path or disk_device_key")
         disk_device_key = _virtual_disk_key(vm, disk_path)
     if host_for_access is None:
         host_for_access = vm.runtime.host
     if read_only:
-        return nfc.RandomAccessOpenReadonly(
-            vm, disk_device_key, host_for_access)
+        return nfc.RandomAccessOpenReadonly(vm, disk_device_key, host_for_access)
     return nfc.RandomAccessOpen(vm, disk_device_key, host_for_access)
 
 
@@ -198,11 +232,12 @@ def _normalize_thumbprint(thumbprint: str) -> str:
 
 
 def get_ssl_cert_thumbprint(
-        host: str,
-        port: int = 443,
-        digest_algorithm: str = "sha1",
-        ssl_context: Optional[ssl.SSLContext] = None,
-        timeout: float = 30.0) -> str:
+    host: str,
+    port: int = 443,
+    digest_algorithm: str = "sha1",
+    ssl_context: Optional[ssl.SSLContext] = None,
+    timeout: float = 30.0,
+) -> str:
     """Return the TLS certificate thumbprint of ``host``:``port``.
 
     Reads the peer certificate in DER form and hashes it with ``hashlib``.
@@ -223,14 +258,11 @@ def get_ssl_cert_thumbprint(
     if ssl_context is None:
         ssl_context = _ssl_client_context(verify=False)
     with socket.create_connection((host, port), timeout=timeout) as sock:
-        with ssl_context.wrap_socket(
-                sock, server_hostname=host) as ssock:
+        with ssl_context.wrap_socket(sock, server_hostname=host) as ssock:
             cert = ssock.getpeercert(binary_form=True)
     if not cert:
-        raise ConnectionError(
-            f"no peer certificate from {host}:{port}")
-    return _format_thumbprint(
-        hashlib.new(digest_algorithm, cert).digest())
+        raise ConnectionError(f"no peer certificate from {host}:{port}")
+    return _format_thumbprint(hashlib.new(digest_algorithm, cert).digest())
 
 
 def _readline(sock: socket.socket) -> str:
@@ -248,7 +280,7 @@ def _readline(sock: socket.socket) -> str:
 def _expect_code(line: str, code: str, what: str) -> str:
     if not line.startswith(code):
         raise ConnectionError(f"authd {what} failed: {line}")
-    return line[len(code):].lstrip()
+    return line[len(code) :].lstrip()
 
 
 def nfcssl_service_name(service: str) -> str:
@@ -266,10 +298,11 @@ def nfcssl_service_name(service: str) -> str:
 
 
 def connect_authd(
-        ticket: vim.HostServiceTicket,
-        allow_untrusted: bool = False,
-        timeout: float = 30.0,
-        nfc_ssl: bool = True) -> ssl.SSLSocket:
+    ticket: vim.HostServiceTicket,
+    allow_untrusted: bool = False,
+    timeout: float = 30.0,
+    nfc_ssl: bool = True,
+) -> ssl.SSLSocket:
     """Complete the ESXi authd handshake using an NFC HostServiceTicket.
 
     Wire sequence captured from VDDK against authd on TCP 902:
@@ -310,10 +343,12 @@ def connect_authd(
         if not allow_untrusted and ticket.sslThumbprint:
             peer = _sha1_thumbprint(ssock.getpeercert(True))
             if _normalize_thumbprint(peer) != _normalize_thumbprint(
-                    ticket.sslThumbprint):
+                ticket.sslThumbprint
+            ):
                 raise ConnectionError(
                     f"ESXi SSL thumbprint mismatch: got {peer}, "
-                    f"expected {ticket.sslThumbprint}")
+                    f"expected {ticket.sslThumbprint}"
+                )
 
         ssock.sendall(f"SESSION {ticket.sessionId}\r\n".encode("ascii"))
         # Trailing space is part of the BANNER command token used by authd.
@@ -338,11 +373,12 @@ class NfcAuthSession:
     """Authenticated VIM session plus an authd/NFC TLS socket."""
 
     def __init__(
-            self,
-            si: vim.ServiceInstance,
-            ticket: vim.HostServiceTicket,
-            authd_sock: ssl.SSLSocket,
-            nfc_ssl: bool = True) -> None:
+        self,
+        si: vim.ServiceInstance,
+        ticket: vim.HostServiceTicket,
+        authd_sock: ssl.SSLSocket,
+        nfc_ssl: bool = True,
+    ) -> None:
         self.si = si
         self.ticket = ticket
         self.authd_sock = authd_sock
@@ -363,17 +399,18 @@ class NfcAuthSession:
 
 
 def authenticate(
-        host: str,
-        username: str,
-        password: str,
-        vm_moref: str,
-        port: int = 443,
-        thumbprint: Optional[str] = None,
-        allow_untrusted: bool = False,
-        disk_device_key: Optional[int] = None,
-        disk_path: Optional[str] = None,
-        read_only: bool = True,
-        nfc_ssl: bool = True) -> NfcAuthSession:
+    host: str,
+    username: str,
+    password: str,
+    vm_moref: str,
+    port: int = 443,
+    thumbprint: Optional[str] = None,
+    allow_untrusted: bool = False,
+    disk_device_key: Optional[int] = None,
+    disk_path: Optional[str] = None,
+    read_only: bool = True,
+    nfc_ssl: bool = True,
+) -> NfcAuthSession:
     """Login to vSphere and complete NFC authd authentication for a VM.
 
     Args:
@@ -393,15 +430,25 @@ def authenticate(
             PROXY service used by nbdssl. Pass False for nbd.
     """
     si = connect_vim(
-        host, username, password, port=port,
-        thumbprint=thumbprint, allow_untrusted=allow_untrusted)
+        host,
+        username,
+        password,
+        port=port,
+        thumbprint=thumbprint,
+        allow_untrusted=allow_untrusted,
+    )
     try:
         vm = vim.VirtualMachine(vm_moref, si._stub)
         ticket = get_nfc_ticket(
-            si, vm, disk_device_key=disk_device_key,
-            disk_path=disk_path, read_only=read_only)
+            si,
+            vm,
+            disk_device_key=disk_device_key,
+            disk_path=disk_path,
+            read_only=read_only,
+        )
         authd_sock = connect_authd(
-            ticket, allow_untrusted=allow_untrusted, nfc_ssl=nfc_ssl)
+            ticket, allow_untrusted=allow_untrusted, nfc_ssl=nfc_ssl
+        )
     except Exception:
         Disconnect(si)
         raise

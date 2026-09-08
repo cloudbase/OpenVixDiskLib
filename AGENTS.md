@@ -73,3 +73,5 @@
 - When writing unit tests, mock decorators are preferred instead of context
   managers.
 - If a folder or file under this directory is inaccessible, ask for permissions.
+- Use "tox -e fmt" to apply code formatting, "tox -e pep8" and "tox -e fmt"
+  and "tox -e mypy" for liniting / static code analysis.

@@ -24,8 +24,7 @@ from typing import Iterator, Optional, Union
 from pyVim.connect import Disconnect
 from pyVmomi import vim
 
-from openvixdisklib import nfc_auth
-from openvixdisklib import nfc_open
+from openvixdisklib import nfc_auth, nfc_open
 
 LOG = logging.getLogger(__name__)
 
@@ -50,21 +49,20 @@ def _nfc_compression(flags: int) -> int:
     alg = flags & (
         VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB
         | VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ
-        | VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ)
+        | VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ
+    )
     if alg == 0:
         return nfc_open.NFC_COMPRESSION_NONE
     if alg == VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ:
         return nfc_open.NFC_COMPRESSION_FASTLZ
     if alg & (alg - 1):
         raise NotImplementedError(
-            "Cannot set two or more NBD compression algorithms at the "
-            "same time")
-    raise NotImplementedError(
-        f"NBD compression open flag 0x{alg:x} is not supported")
+            "Cannot set two or more NBD compression algorithms at the same time"
+        )
+    raise NotImplementedError(f"NBD compression open flag 0x{alg:x} is not supported")
 
 
-VIX_SUPPORTED_COMPATIBILITY_MODES = [
-    "6.0", "6.5", "6.7", "7.0", "8.0"]
+VIX_SUPPORTED_COMPATIBILITY_MODES = ["6.0", "6.5", "6.7", "7.0", "8.0"]
 
 
 def get_buffer(size: int):
@@ -74,8 +72,7 @@ def get_buffer(size: int):
 
 def _parse_vm_moref(vmx_spec: Optional[str]) -> str:
     if not vmx_spec:
-        raise ValueError(
-            "vmx_spec is required (for example 'moref=vm-13098')")
+        raise ValueError("vmx_spec is required (for example 'moref=vm-13098')")
     if "=" in vmx_spec:
         kind, value = vmx_spec.split("=", 1)
         if kind.lower() != "moref" or not value:
@@ -97,21 +94,23 @@ def _select_transport(transport_modes: Optional[str]) -> str:
         if mode in ("nbdssl", "nbd"):
             return mode
     raise NotImplementedError(
-        f"supported transports are nbdssl and nbd, got {transport_modes!r}")
+        f"supported transports are nbdssl and nbd, got {transport_modes!r}"
+    )
 
 
 class _Connection:
     """VIM session plus the VM moref needed to issue an NFC ticket at Open."""
 
     def __init__(
-            self,
-            si: vim.ServiceInstance,
-            vm_moref: str,
-            snapshot_ref: Optional[str],
-            thumbprint: Optional[str],
-            allow_untrusted: bool,
-            read_only: bool,
-            transport_mode: str) -> None:
+        self,
+        si: vim.ServiceInstance,
+        vm_moref: str,
+        snapshot_ref: Optional[str],
+        thumbprint: Optional[str],
+        allow_untrusted: bool,
+        read_only: bool,
+        transport_mode: str,
+    ) -> None:
         self.si = si
         self.vm_moref = vm_moref
         self.snapshot_ref = snapshot_ref
@@ -124,11 +123,7 @@ class _Connection:
 class _DiskHandle:
     """Opened NFC disk plus the authd TLS socket it was taken from."""
 
-    def __init__(
-            self,
-            disk: nfc_open.NfcDisk,
-            authd_sock,
-            transport_mode: str) -> None:
+    def __init__(self, disk: nfc_open.NfcDisk, authd_sock, transport_mode: str) -> None:
         self.disk = disk
         self.authd_sock = authd_sock
         self.transport_mode = transport_mode
@@ -138,9 +133,10 @@ class VixDiskLibHandle:
     """VDDK-compatible handle backed by pyVmomi and the NFC replacement."""
 
     def __init__(
-            self,
-            config_path: Optional[str] = None,
-            vixdisklib_compatibility_version: Optional[str] = None) -> None:
+        self,
+        config_path: Optional[str] = None,
+        vixdisklib_compatibility_version: Optional[str] = None,
+    ) -> None:
         """Accept the VDDK wrapper constructor; no native library is loaded.
 
         Args:
@@ -164,18 +160,20 @@ class VixDiskLibHandle:
                 raise ValueError(
                     "Unsupported vixDiskLib version format '%s'. vixDiskLib "
                     "compatibility mode must be of the form "
-                    "'$major.$minor'" % version) from ex
+                    "'$major.$minor'" % version
+                ) from ex
             version_used = version
             break
 
         if not version_used:
             raise Exception(
                 "Could not initialize vixDiskLib with any of the following "
-                "versions: %s" % target_versions)
+                "versions: %s" % target_versions
+            )
 
         LOG.info(
-            "Successfully initialized vixDiskLib with target version '%s'",
-            version_used)
+            "Successfully initialized vixDiskLib with target version '%s'", version_used
+        )
 
     @classmethod
     def get_vix_disklib_name(cls) -> str:
@@ -194,17 +192,18 @@ class VixDiskLibHandle:
 
     @contextlib.contextmanager
     def connect(
-            self,
-            server_name: str,
-            thumbprint: Optional[str],
-            username: str,
-            password: str,
-            vmx_spec: Optional[str] = None,
-            snapshot_ref: Optional[str] = None,
-            read_only: bool = True,
-            transport_modes: Optional[str] = None,
-            port: int = 443,
-            allow_untrusted: bool = False) -> Iterator[_Connection]:
+        self,
+        server_name: str,
+        thumbprint: Optional[str],
+        username: str,
+        password: str,
+        vmx_spec: Optional[str] = None,
+        snapshot_ref: Optional[str] = None,
+        read_only: bool = True,
+        transport_modes: Optional[str] = None,
+        port: int = 443,
+        allow_untrusted: bool = False,
+    ) -> Iterator[_Connection]:
         """Login to vCenter/ESXi. Matches ``VixDiskLib_ConnectEx``.
 
         The NFC ticket and authd handshake are deferred to ``open``, as in
@@ -235,11 +234,17 @@ class VixDiskLibHandle:
             password,
             port=port,
             thumbprint=thumbprint,
-            allow_untrusted=allow_untrusted or not thumbprint)
+            allow_untrusted=allow_untrusted or not thumbprint,
+        )
         conn = _Connection(
-            si, vm_moref, snapshot_ref, thumbprint,
-            allow_untrusted or not thumbprint, read_only,
-            transport_mode)
+            si,
+            vm_moref,
+            snapshot_ref,
+            thumbprint,
+            allow_untrusted or not thumbprint,
+            read_only,
+            transport_mode,
+        )
         try:
             yield conn
         finally:
@@ -247,10 +252,11 @@ class VixDiskLibHandle:
 
     @contextlib.contextmanager
     def open(
-            self,
-            conn: _Connection,
-            disk_path: str,
-            flags: int = VIXDISKLIB_FLAG_OPEN_READ_ONLY) -> Iterator[_DiskHandle]:
+        self,
+        conn: _Connection,
+        disk_path: str,
+        flags: int = VIXDISKLIB_FLAG_OPEN_READ_ONLY,
+    ) -> Iterator[_DiskHandle]:
         """Open ``disk_path`` over NFC. Matches ``VixDiskLib_Open``.
 
         Read-only opens request ``NfcGetVmFiles`` (VM only). The VMDK
@@ -271,22 +277,21 @@ class VixDiskLibHandle:
         compression = _nfc_compression(flags)
         read_only = bool(flags & VIXDISKLIB_FLAG_OPEN_READ_ONLY)
         if not read_only and conn.read_only:
-            raise NotImplementedError(
-                "ConnectEx was read-only; cannot open for write")
+            raise NotImplementedError("ConnectEx was read-only; cannot open for write")
 
         vm = vim.VirtualMachine(conn.vm_moref, conn.si._stub)
         nfc_ssl = conn.transport_mode == "nbdssl"
         ticket = nfc_auth.get_nfc_ticket(
-            conn.si, vm, read_only=read_only,
-            disk_path=None if read_only else disk_path)
+            conn.si, vm, read_only=read_only, disk_path=None if read_only else disk_path
+        )
         authd_sock = nfc_auth.connect_authd(
-            ticket, allow_untrusted=conn.allow_untrusted, nfc_ssl=nfc_ssl)
-        session = nfc_auth.NfcAuthSession(
-            conn.si, ticket, authd_sock, nfc_ssl=nfc_ssl)
+            ticket, allow_untrusted=conn.allow_untrusted, nfc_ssl=nfc_ssl
+        )
+        session = nfc_auth.NfcAuthSession(conn.si, ticket, authd_sock, nfc_ssl=nfc_ssl)
         try:
             disk = nfc_open.open_disk(
-                session, disk_path, read_only=read_only,
-                compression=compression)
+                session, disk_path, read_only=read_only, compression=compression
+            )
         except Exception:
             authd_sock.close()
             raise
@@ -297,11 +302,12 @@ class VixDiskLibHandle:
             self.close(handle)
 
     def read(
-            self,
-            disk_handle: _DiskHandle,
-            start_sector: int,
-            num_sectors: int,
-            buf: Union[ctypes.Array, bytearray, memoryview]) -> None:
+        self,
+        disk_handle: _DiskHandle,
+        start_sector: int,
+        num_sectors: int,
+        buf: Union[ctypes.Array, bytearray, memoryview],
+    ) -> None:
         """Read ``num_sectors`` from ``start_sector`` into ``buf``.
 
         Args:
@@ -313,18 +319,18 @@ class VixDiskLibHandle:
         data = disk_handle.disk.read(start_sector, num_sectors)
         if isinstance(buf, (bytearray, memoryview)):
             if len(buf) < len(data):
-                raise Exception(
-                    f"read buffer is {len(buf)} bytes, need {len(data)}")
-            buf[:len(data)] = data
+                raise Exception(f"read buffer is {len(buf)} bytes, need {len(data)}")
+            buf[: len(data)] = data
             return
         ctypes.memmove(buf, data, len(data))
 
     def write(
-            self,
-            disk_handle: _DiskHandle,
-            start_sector: int,
-            num_sectors: int,
-            buf: Union[ctypes.Array, bytes, bytearray, memoryview]) -> None:
+        self,
+        disk_handle: _DiskHandle,
+        start_sector: int,
+        num_sectors: int,
+        buf: Union[ctypes.Array, bytes, bytearray, memoryview],
+    ) -> None:
         """Write ``num_sectors`` from ``buf`` starting at ``start_sector``.
 
         Args:

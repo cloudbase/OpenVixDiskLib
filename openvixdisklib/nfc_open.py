@@ -98,15 +98,14 @@ def takeover_authd_socket(ssock: ssl.SSLSocket) -> socket.socket:
         family=ssock.family,
         type=ssock.type,
         proto=ssock.proto,
-        fileno=os.dup(ssock.fileno()))
+        fileno=os.dup(ssock.fileno()),
+    )
     raw.settimeout(timeout)
     _enable_tcp_nodelay(raw)
     return raw
 
 
-def wrap_nfcssl_socket(
-        ssock: ssl.SSLSocket,
-        server_hostname: str) -> ssl.SSLSocket:
+def wrap_nfcssl_socket(ssock: ssl.SSLSocket, server_hostname: str) -> ssl.SSLSocket:
     """Start the second TLS session used by NBDSSL after PROXY.
 
     After ``200 Connect ha-nfcssl``, authd TLS is finished and
@@ -121,8 +120,7 @@ def wrap_nfcssl_socket(
     raw = takeover_authd_socket(ssock)
     ssl_context = _ssl_client_context(verify=False)
     try:
-        return ssl_context.wrap_socket(
-            raw, server_hostname=server_hostname)
+        return ssl_context.wrap_socket(raw, server_hostname=server_hostname)
     except Exception:
         raw.close()
         raise
@@ -139,13 +137,13 @@ def _recvn(sock: socket.socket, size: int) -> bytes:
         chunk = sock.recv(size - len(buf))
         if not chunk:
             raise NfcProtocolError(
-                f"NFC connection closed, needed {size} bytes, got {len(buf)}")
+                f"NFC connection closed, needed {size} bytes, got {len(buf)}"
+            )
         buf.extend(chunk)
     return bytes(buf)
 
 
-def _send_nfc_msg(
-        sock: socket.socket, msg_type: int, body: bytes = b"") -> None:
+def _send_nfc_msg(sock: socket.socket, msg_type: int, body: bytes = b"") -> None:
     if len(body) > NFC_MSG_SIZE - 4:
         raise ValueError("NFC classic message body too large")
     frame = struct.pack("<I", msg_type) + body
@@ -159,16 +157,15 @@ def _recv_nfc_msg(sock: socket.socket) -> tuple[int, bytes]:
 
 
 def _pack_aio_hdr(msg_type: int, payload_size: int, op_id: int) -> bytes:
-    return struct.pack(
-        "<IIII", NFC_AIO_MAGIC, msg_type, payload_size, op_id)
+    return struct.pack("<IIII", NFC_AIO_MAGIC, msg_type, payload_size, op_id)
 
 
 def _unpack_aio_hdr(hdr: bytes) -> tuple[int, int, int]:
     magic, msg_type, size, op_id = struct.unpack_from("<IIII", hdr)
     if magic != NFC_AIO_MAGIC:
         raise NfcProtocolError(
-            f"AIO header magic mismatch: 0x{magic:x}, "
-            f"expected 0x{NFC_AIO_MAGIC:x}")
+            f"AIO header magic mismatch: 0x{magic:x}, expected 0x{NFC_AIO_MAGIC:x}"
+        )
     if msg_type == NFC_AIO_MSG_ERROR:
         raise NfcProtocolError(f"AIO error opId={op_id} size={size}")
     return msg_type, size, op_id
@@ -178,12 +175,13 @@ class NfcDisk:
     """An NFC AIO session with one VMDK opened for I/O."""
 
     def __init__(
-            self,
-            sock: socket.socket,
-            path: str,
-            handle: int,
-            sector_size: int,
-            compression: int = NFC_COMPRESSION_NONE) -> None:
+        self,
+        sock: socket.socket,
+        path: str,
+        handle: int,
+        sector_size: int,
+        compression: int = NFC_COMPRESSION_NONE,
+    ) -> None:
         """Wrap an AIO session that already has ``path`` open.
 
         Args:
@@ -207,15 +205,12 @@ class NfcDisk:
         self._op_id += 1
         return op_id
 
-    def _aio_send(
-            self,
-            msg_type: int,
-            payload: bytes,
-            extra: bytes = b"") -> int:
+    def _aio_send(self, msg_type: int, payload: bytes, extra: bytes = b"") -> int:
         """Send one AIO request (header, payload, and extra in one write)."""
         op_id = self._next_op_id()
         self._sock.sendall(
-            _pack_aio_hdr(msg_type, len(payload), op_id) + payload + extra)
+            _pack_aio_hdr(msg_type, len(payload), op_id) + payload + extra
+        )
         return op_id
 
     def _aio_recv_reply(self) -> tuple[int, int, bytes]:
@@ -224,27 +219,24 @@ class NfcDisk:
         magic, rtype, rsize, rop = struct.unpack_from("<IIII", rhdr)
         if magic != NFC_AIO_MAGIC:
             raise NfcProtocolError(
-                f"AIO header magic mismatch: 0x{magic:x}, "
-                f"expected 0x{NFC_AIO_MAGIC:x}")
+                f"AIO header magic mismatch: 0x{magic:x}, expected 0x{NFC_AIO_MAGIC:x}"
+            )
         body = _recvn(self._sock, rsize) if rsize else b""
         if rtype == NFC_AIO_MSG_ERROR:
-            raise NfcProtocolError(
-                f"AIO error opId={rop} size={rsize} {body.hex()}")
+            raise NfcProtocolError(f"AIO error opId={rop} size={rsize} {body.hex()}")
         return rtype, rop, body
 
     def _aio_roundtrip(
-            self,
-            msg_type: int,
-            payload: bytes,
-            extra: bytes = b"",
-            extra_recv: int = 0) -> bytes:
+        self, msg_type: int, payload: bytes, extra: bytes = b"", extra_recv: int = 0
+    ) -> bytes:
         """Send one AIO request and return the reply payload (+ extra)."""
         op_id = self._aio_send(msg_type, payload, extra)
         rtype, rop, body = self._aio_recv_reply()
         if rtype != msg_type or rop != op_id:
             raise NfcProtocolError(
                 f"AIO reply type={rtype} opId={rop}, "
-                f"expected type={msg_type} opId={op_id}")
+                f"expected type={msg_type} opId={op_id}"
+            )
         if extra_recv:
             body += _recvn(self._sock, extra_recv)
         return body
@@ -269,17 +261,10 @@ class NfcDisk:
         offset = start_sector * self.sector_size
         opcode = NFC_AIO_IO_READ | (self.compression << 32)
         payload = struct.pack(
-            "<QQQQIII",
-            self.handle,
-            opcode,
-            offset,
-            length,
-            length,
-            length,
-            0)
+            "<QQQQIII", self.handle, opcode, offset, length, length, length, 0
+        )
         op_id = self._next_op_id()
-        self._sock.sendall(
-            _pack_aio_hdr(NFC_AIO_MSG_IO, len(payload), op_id) + payload)
+        self._sock.sendall(_pack_aio_hdr(NFC_AIO_MSG_IO, len(payload), op_id) + payload)
         data = bytearray(length)
         filled = 0
         seen: set[int] = set()
@@ -289,11 +274,11 @@ class NfcDisk:
             if rtype != NFC_AIO_MSG_IO or rop != op_id:
                 raise NfcProtocolError(
                     f"AIO IO reply type={rtype} opId={rop}, "
-                    f"expected type={NFC_AIO_MSG_IO} opId={op_id}")
+                    f"expected type={NFC_AIO_MSG_IO} opId={op_id}"
+                )
             body = _recvn(self._sock, rsize)
             if rsize < 36:
-                raise NfcProtocolError(
-                    f"AIO IO reply payload too short: {rsize}")
+                raise NfcProtocolError(f"AIO IO reply payload too short: {rsize}")
             # Fragments may arrive out of order. Offset 28 is the byte
             # offset of this chunk within the request (0, 65536, …),
             # not a 0-based index. Offset 32 is the uncompressed
@@ -301,13 +286,11 @@ class NfcDisk:
             # (2), extra data is compressed and offset 36 is its size.
             opcode = struct.unpack_from("<Q", body, 8)[0]
             dest, chunk_len = struct.unpack_from("<II", body, 28)
-            if (
-                    dest in seen
-                    or chunk_len == 0
-                    or dest + chunk_len > length):
+            if dest in seen or chunk_len == 0 or dest + chunk_len > length:
                 raise NfcProtocolError(
                     f"AIO IO chunk offset={dest} length={chunk_len} invalid, "
-                    f"request {length}")
+                    f"request {length}"
+                )
             seen.add(dest)
             ctype = opcode >> 32
             if ctype == NFC_COMPRESSION_FASTLZ:
@@ -317,25 +300,21 @@ class NfcDisk:
                     chunk = fastlz.decompress(extra, chunk_len)
                 except ValueError as exc:
                     raise NfcProtocolError(
-                        f"FastLZ read fragment failed: {exc}") from exc
+                        f"FastLZ read fragment failed: {exc}"
+                    ) from exc
                 if len(chunk) != chunk_len:
                     raise NfcProtocolError(
-                        f"FastLZ read got {len(chunk)} bytes, "
-                        f"expected {chunk_len}")
+                        f"FastLZ read got {len(chunk)} bytes, expected {chunk_len}"
+                    )
             elif ctype == NFC_COMPRESSION_NONE:
                 chunk = _recvn(self._sock, chunk_len)
             else:
-                raise NfcProtocolError(
-                    f"unsupported NFC IO compression type {ctype}")
-            data[dest:dest + chunk_len] = chunk
+                raise NfcProtocolError(f"unsupported NFC IO compression type {ctype}")
+            data[dest : dest + chunk_len] = chunk
             filled += chunk_len
         return bytes(data)
 
-    def write(
-            self,
-            start_sector: int,
-            num_sectors: int,
-            data: bytes) -> None:
+    def write(self, start_sector: int, num_sectors: int, data: bytes) -> None:
         """Write ``num_sectors`` starting at ``start_sector``.
 
         Matches ``VixDiskLib_Write``: one ``NFC_AIO_MSG_IO`` ``opId``
@@ -352,19 +331,16 @@ class NfcDisk:
             raise ValueError("num_sectors must be at least 1")
         length = num_sectors * self.sector_size
         if len(data) != length:
-            raise ValueError(
-                f"write data is {len(data)} bytes, need {length}")
+            raise ValueError(f"write data is {len(data)} bytes, need {length}")
         disk_offset = start_sector * self.sector_size
         op_id = self._next_op_id()
         frag_offset = 0
         while frag_offset < length:
-            chunk = data[frag_offset:frag_offset + NFC_AIO_BUFFER_SIZE]
+            chunk = data[frag_offset : frag_offset + NFC_AIO_BUFFER_SIZE]
             extra = chunk
             extra_len = len(chunk)
             ctype = NFC_COMPRESSION_NONE
-            if (
-                    self.compression == NFC_COMPRESSION_FASTLZ
-                    and extra_len >= 16):
+            if self.compression == NFC_COMPRESSION_FASTLZ and extra_len >= 16:
                 compressed = fastlz.compress(chunk)
                 if compressed and len(compressed) < extra_len:
                     extra = compressed
@@ -380,16 +356,18 @@ class NfcDisk:
                 frag_offset,
                 len(chunk),
                 extra_len,
-                0)
+                0,
+            )
             self._sock.sendall(
-                _pack_aio_hdr(NFC_AIO_MSG_IO, len(payload), op_id)
-                + payload + extra)
+                _pack_aio_hdr(NFC_AIO_MSG_IO, len(payload), op_id) + payload + extra
+            )
             frag_offset += len(chunk)
         rtype, rop, _body = self._aio_recv_reply()
         if rtype != NFC_AIO_MSG_IO or rop != op_id:
             raise NfcProtocolError(
                 f"AIO IO write reply type={rtype} opId={rop}, "
-                f"expected type={NFC_AIO_MSG_IO} opId={op_id}")
+                f"expected type={NFC_AIO_MSG_IO} opId={op_id}"
+            )
 
     def close(self) -> None:
         """Close the VMDK, the AIO session, and the classic NFC session."""
@@ -397,10 +375,8 @@ class NfcDisk:
             return
         self._closed = True
         try:
-            self._aio_roundtrip(
-                NFC_AIO_MSG_CLOSE_FILE, struct.pack("<Q", self.handle))
-            self._aio_roundtrip(
-                NFC_AIO_MSG_CLOSE_SESSION, struct.pack("<I", 0))
+            self._aio_roundtrip(NFC_AIO_MSG_CLOSE_FILE, struct.pack("<Q", self.handle))
+            self._aio_roundtrip(NFC_AIO_MSG_CLOSE_SESSION, struct.pack("<I", 0))
             _send_nfc_msg(self._sock, NFC_MSG_SESSION_COMPLETE)
         finally:
             try:
@@ -415,11 +391,7 @@ class NfcDisk:
         self.close()
 
 
-def _handshake(
-        sock: socket.socket,
-        client_name: str,
-        op_id: str,
-        version: int) -> None:
+def _handshake(sock: socket.socket, client_name: str, op_id: str, version: int) -> None:
     """Run the classic NFC session handshake used by VDDK NBD."""
     _send_nfc_msg(sock, NFC_MSG_HANDSHAKE, b"PlainText")
     _send_nfc_msg(sock, NFC_MSG_SESSION_PARAMS)
@@ -427,43 +399,46 @@ def _handshake(
     if reply_type != NFC_MSG_SESSION_PARAMS_REPLY:
         raise NfcProtocolError(
             f"expected session-params reply {NFC_MSG_SESSION_PARAMS_REPLY}, "
-            f"got {reply_type}")
+            f"got {reply_type}"
+        )
 
     _send_nfc_msg(sock, NFC_MSG_VERSION, struct.pack("<I", version))
     reply_type, body = _recv_nfc_msg(sock)
     if reply_type != NFC_MSG_VERSION:
         raise NfcProtocolError(
-            f"expected version reply {NFC_MSG_VERSION}, got {reply_type}")
+            f"expected version reply {NFC_MSG_VERSION}, got {reply_type}"
+        )
     remote_version = struct.unpack_from("<I", body)[0]
     if remote_version < 3:
         raise NfcProtocolError(
-            f"NFC server version {remote_version} is too old for AIO")
+            f"NFC server version {remote_version} is too old for AIO"
+        )
 
     name_b = client_name.encode("ascii")
     op_b = op_id.encode("ascii")
     _send_nfc_msg(
-        sock, NFC_MSG_CONNECTION_DATA,
-        struct.pack("<II", len(name_b), len(op_b)))
+        sock, NFC_MSG_CONNECTION_DATA, struct.pack("<II", len(name_b), len(op_b))
+    )
     sock.sendall(name_b)
     sock.sendall(op_b)
     _send_nfc_msg(
-        sock, NFC_MSG_SESSION_FEATURES,
-        struct.pack("<I", NFC_SESSION_FEATURE_INTERRUPTION_SWITCH))
+        sock,
+        NFC_MSG_SESSION_FEATURES,
+        struct.pack("<I", NFC_SESSION_FEATURE_INTERRUPTION_SWITCH),
+    )
     _send_nfc_msg(sock, NFC_MSG_AIO_SESSION_OPEN)
     reply_type, _ = _recv_nfc_msg(sock)
     if reply_type != NFC_MSG_AIO_SESSION_OPEN:
         raise NfcProtocolError(
             f"expected AIO session-open reply "
-            f"{NFC_MSG_AIO_SESSION_OPEN}, got {reply_type}")
+            f"{NFC_MSG_AIO_SESSION_OPEN}, got {reply_type}"
+        )
 
 
 def _aio_prepare(disk: NfcDisk) -> None:
-    disk._aio_roundtrip(
-        NFC_AIO_MSG_OPEN_SESSION, bytes(16))
-    disk._aio_roundtrip(
-        NFC_AIO_MSG_SET_SOCK_OPTS, bytes(12))
-    disk._aio_roundtrip(
-        NFC_AIO_MSG_SET_RES_POOL, struct.pack("<I", 1))
+    disk._aio_roundtrip(NFC_AIO_MSG_OPEN_SESSION, bytes(16))
+    disk._aio_roundtrip(NFC_AIO_MSG_SET_SOCK_OPTS, bytes(12))
+    disk._aio_roundtrip(NFC_AIO_MSG_SET_RES_POOL, struct.pack("<I", 1))
 
 
 def _parse_open_reply(body: bytes) -> tuple[int, int]:
@@ -472,21 +447,21 @@ def _parse_open_reply(body: bytes) -> tuple[int, int]:
     handle, file_type, _flags = struct.unpack_from("<QII", body, 8)
     sector_size = struct.unpack_from("<I", body, 36)[0]
     if file_type != NFC_DISK:
-        raise NfcProtocolError(
-            f"opened file type {file_type}, expected NFC_DISK")
+        raise NfcProtocolError(f"opened file type {file_type}, expected NFC_DISK")
     if sector_size == 0:
         sector_size = NFC_SECTOR_SIZE
     return handle, sector_size
 
 
 def open_disk(
-        session: NfcAuthSession,
-        disk_path: str,
-        client_name: str = "vddk",
-        op_id: str = "nbdmode",
-        version: int = NFC_PROTOCOL_VERSION,
-        read_only: bool = True,
-        compression: int = NFC_COMPRESSION_NONE) -> NfcDisk:
+    session: NfcAuthSession,
+    disk_path: str,
+    client_name: str = "vddk",
+    op_id: str = "nbdmode",
+    version: int = NFC_PROTOCOL_VERSION,
+    read_only: bool = True,
+    compression: int = NFC_COMPRESSION_NONE,
+) -> NfcDisk:
     """Open ``disk_path`` over the authenticated authd socket.
 
     Matches VDDK ``VixDiskLib_Open`` of a datastore path after the NFC
@@ -506,31 +481,31 @@ def open_disk(
         compression: ``NFC_COMPRESSION_NONE`` or ``NFC_COMPRESSION_FASTLZ``.
             OPEN_FILE flags are unchanged; compression is per IO message.
     """
-    if compression not in (
-            NFC_COMPRESSION_NONE, NFC_COMPRESSION_FASTLZ):
+    if compression not in (NFC_COMPRESSION_NONE, NFC_COMPRESSION_FASTLZ):
         raise NotImplementedError(
-            f"NFC compression type {compression} is not supported")
+            f"NFC compression type {compression} is not supported"
+        )
     if session.nfc_ssl:
-        sock = wrap_nfcssl_socket(
-            session.authd_sock, session.ticket.host)
+        sock = wrap_nfcssl_socket(session.authd_sock, session.ticket.host)
     else:
         sock = takeover_authd_socket(session.authd_sock)
     try:
         _handshake(sock, client_name, op_id, version)
         disk = NfcDisk(
-            sock, disk_path, handle=0, sector_size=NFC_SECTOR_SIZE,
-            compression=compression)
+            sock,
+            disk_path,
+            handle=0,
+            sector_size=NFC_SECTOR_SIZE,
+            compression=compression,
+        )
         _aio_prepare(disk)
         path_b = disk_path.encode("utf-8")
         open_flags = (
-            NFC_OPEN_FLAGS_READ_ONLY if read_only
-            else NFC_OPEN_FLAGS_READ_WRITE)
-        open_body = struct.pack(
-            "<IIIIII",
-            len(path_b), 0, 0, 0, NFC_DISK, open_flags)
+            NFC_OPEN_FLAGS_READ_ONLY if read_only else NFC_OPEN_FLAGS_READ_WRITE
+        )
+        open_body = struct.pack("<IIIIII", len(path_b), 0, 0, 0, NFC_DISK, open_flags)
         open_body = open_body.ljust(60, b"\x00")
-        reply = disk._aio_roundtrip(
-            NFC_AIO_MSG_OPEN_FILE, open_body, extra=path_b)
+        reply = disk._aio_roundtrip(NFC_AIO_MSG_OPEN_FILE, open_body, extra=path_b)
         handle, sector_size = _parse_open_reply(reply)
         disk.handle = handle
         disk.sector_size = sector_size
