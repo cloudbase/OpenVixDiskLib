@@ -1,17 +1,17 @@
 # Reverse-engineering procedure
 
-This is the working method used to replace VDDK’s NBD path with Python.
-Protocol details live in `docs/nfc_auth.md`, `docs/nfc_open.md`,
-`docs/nfc_read.md`, and `docs/nfc_write.md`. The capture tool is
-described in `docs/ssl_hook.md`.
+This is the working method used to replace VDDK’s NBD path with a Python
+implementation. Protocol details live in `docs/nfc_auth.md`,
+`docs/nfc_open.md`, `docs/nfc_read.md`, and `docs/nfc_write.md`.
+The capture tool is described in `docs/ssl_hook.md`.
 This file is the **sequence of steps**, including dead ends, so later
 NFC work can follow the same loop instead of rediscovering it.
 
 Scope so far: `VixDiskLib_ConnectEx` + `VixDiskLib_Open` +
 `VixDiskLib_Read` + `VixDiskLib_Write` against lab vCenter 8.0.1 /
-ESXi 8, transports `nbd` and `nbdssl`. Driver: `tests/integration/` (the
-session-scoped `lab` fixture creates a temporary empty VM with a 10 GiB
-disk and destroys it when the pytest session ends).
+ESXi 8, transports `nbd` and `nbdssl`. Validation method:
+`tests/integration/` (the session-scoped `lab` fixture creates a temporary
+empty VM with a 10 GiB disk and destroys it when the pytest session ends).
 
 Rule from `AGENTS.md`: reuse pyVmomi for every public VIM operation.
 Only reimplement what pyVmomi does not expose.
