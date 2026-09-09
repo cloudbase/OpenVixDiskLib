@@ -50,25 +50,28 @@ def _register_nfc_types() -> None:
         _NFC_TYPES_REGISTERED = True
         return
 
+    # Method: (vmodlName, wsdlName, version, params, result, privilege, faults)
+    # Param:  (name, type, version, flags, privilege); flags 0 = required
+    # Result: (flags, vmodlType, wsdlType)
     CreateManagedType(
-        "vim.NfcService",
-        "NfcService",
-        "vmodl.ManagedObject",
-        "vim.version.version1",
-        [],
-        [
+        "vim.NfcService",  # vmodl name
+        "NfcService",  # WSDL name
+        "vmodl.ManagedObject",  # parent
+        "vim.version.version1",  # version
+        [],  # properties
+        [  # methods
             (
-                "getVmFiles",
-                "NfcGetVmFiles",
+                "getVmFiles",  # vmodl method
+                "NfcGetVmFiles",  # WSDL method
                 "vim.version.version1",
                 (("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),),
-                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),
-                None,
-                None,
+                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),  # result
+                None,  # privilege
+                None,  # faults
             ),
             (
-                "randomAccessOpen",
-                "NfcRandomAccessOpenDisk",
+                "randomAccessOpen",  # vmodl method
+                "NfcRandomAccessOpenDisk",  # WSDL method
                 "vim.version.version1",
                 (
                     ("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),
@@ -77,17 +80,17 @@ def _register_nfc_types() -> None:
                         "hostForAccess",
                         "vim.HostSystem",
                         "vim.version.version1",
-                        F_OPTIONAL,
-                        None,
+                        F_OPTIONAL,  # flags
+                        None,  # privilege
                     ),
                 ),
-                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),
-                None,
-                None,
+                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),  # result
+                None,  # privilege
+                None,  # faults
             ),
             (
-                "randomAccessOpenReadonly",
-                "NfcRandomAccessOpenReadonly",
+                "randomAccessOpenReadonly",  # vmodl method
+                "NfcRandomAccessOpenReadonly",  # WSDL method
                 "vim.version.version1",
                 (
                     ("vm", "vim.VirtualMachine", "vim.version.version1", 0, None),
@@ -96,22 +99,22 @@ def _register_nfc_types() -> None:
                         "hostForAccess",
                         "vim.HostSystem",
                         "vim.version.version1",
-                        F_OPTIONAL,
-                        None,
+                        F_OPTIONAL,  # flags
+                        None,  # privilege
                     ),
                 ),
-                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),
-                None,
-                None,
+                (0, "vim.HostServiceTicket", "vim.HostServiceTicket"),  # result
+                None,  # privilege
+                None,  # faults
             ),
             (
-                "getServerNfcLibVersion",
-                "NfcGetServerNfcLibVersion",
+                "getServerNfcLibVersion",  # vmodl method
+                "NfcGetServerNfcLibVersion",  # WSDL method
                 "vim.version.version1",
                 (("hostForAccess", "vim.HostSystem", "vim.version.version1", 0, None),),
-                (0, "int", "int"),
-                None,
-                None,
+                (0, "int", "int"),  # result
+                None,  # privilege
+                None,  # faults
             ),
         ],
     )
