@@ -39,10 +39,10 @@ password to ESXi port 902. It:
 
 Lab topology used for capture:
 
-- vCenter: `10.8.1.199` (VirtualCenter 8.0.1)
-- VM: `vm-13098` on host `host-13001` (`10.8.1.250`)
+- vCenter: `<vcenter>` (VirtualCenter 8.0.1)
+- VM: `vm-13098` on host `host-13001` (`<esxi>`)
 - NFC service moref on vCenter: `nfcService`
-- Authd: `10.8.1.250:902`
+- Authd: `<esxi>:902`
 
 ## Stage 1: VIM login
 
@@ -138,7 +138,7 @@ Public pyVmomi type. Example from this lab:
 
 | Field            | Example                                | Role                                      |
 | ---------------- | -------------------------------------- | ----------------------------------------- |
-| `host`           | `10.8.1.250`                           | ESXi management / NFC address             |
+| `host`           | `10.11.12.13`                          | ESXi management / NFC address             |
 | `port`           | `902`                                  | authd TCP port                            |
 | `sslThumbprint`  | `BE:22:58:...:76:29`                   | SHA-1 of the ESXi TLS cert                |
 | `service`        | `vpxa-nfc`                             | authd `PROXY` argument                    |
