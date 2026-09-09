@@ -19,7 +19,7 @@ import contextlib
 import ctypes
 import logging
 import os
-from typing import Iterator, Optional, Union
+from collections.abc import Iterator
 
 from pyVim.connect import Disconnect
 from pyVmomi import vim
@@ -70,7 +70,7 @@ def get_buffer(size: int):
     return ctypes.create_string_buffer(size)
 
 
-def _parse_vm_moref(vmx_spec: Optional[str]) -> str:
+def _parse_vm_moref(vmx_spec: str | None) -> str:
     if not vmx_spec:
         raise ValueError("vmx_spec is required (for example 'moref=vm-13098')")
     if "=" in vmx_spec:
@@ -81,7 +81,7 @@ def _parse_vm_moref(vmx_spec: Optional[str]) -> str:
     return vmx_spec
 
 
-def _select_transport(transport_modes: Optional[str]) -> str:
+def _select_transport(transport_modes: str | None) -> str:
     """Return the first requested transport this replacement implements.
 
     ``None`` defaults to ``nbdssl``. A colon-separated list (VDDK
@@ -105,8 +105,8 @@ class _Connection:
         self,
         si: vim.ServiceInstance,
         vm_moref: str,
-        snapshot_ref: Optional[str],
-        thumbprint: Optional[str],
+        snapshot_ref: str | None,
+        thumbprint: str | None,
         allow_untrusted: bool,
         read_only: bool,
         transport_mode: str,
@@ -134,8 +134,8 @@ class VixDiskLibHandle:
 
     def __init__(
         self,
-        config_path: Optional[str] = None,
-        vixdisklib_compatibility_version: Optional[str] = None,
+        config_path: str | None = None,
+        vixdisklib_compatibility_version: str | None = None,
     ) -> None:
         """Accept the VDDK wrapper constructor; no native library is loaded.
 
@@ -166,7 +166,7 @@ class VixDiskLibHandle:
             break
 
         if not version_used:
-            raise Exception(
+            raise RuntimeError(
                 "Could not initialize vixDiskLib with any of the following "
                 "versions: %s" % target_versions
             )
@@ -194,13 +194,13 @@ class VixDiskLibHandle:
     def connect(
         self,
         server_name: str,
-        thumbprint: Optional[str],
+        thumbprint: str | None,
         username: str,
         password: str,
-        vmx_spec: Optional[str] = None,
-        snapshot_ref: Optional[str] = None,
+        vmx_spec: str | None = None,
+        snapshot_ref: str | None = None,
         read_only: bool = True,
-        transport_modes: Optional[str] = None,
+        transport_modes: str | None = None,
         port: int = 443,
         allow_untrusted: bool = False,
     ) -> Iterator[_Connection]:
@@ -318,7 +318,7 @@ class VixDiskLibHandle:
         disk_handle: _DiskHandle,
         start_sector: int,
         num_sectors: int,
-        buf: Union[ctypes.Array, bytearray, memoryview],
+        buf: ctypes.Array | bytearray | memoryview,
     ) -> None:
         """Read ``num_sectors`` from ``start_sector`` into ``buf``.
 
@@ -331,7 +331,7 @@ class VixDiskLibHandle:
         data = disk_handle.disk.read(start_sector, num_sectors)
         if isinstance(buf, (bytearray, memoryview)):
             if len(buf) < len(data):
-                raise Exception(f"read buffer is {len(buf)} bytes, need {len(data)}")
+                raise RuntimeError(f"read buffer is {len(buf)} bytes, need {len(data)}")
             buf[: len(data)] = data
             return
         ctypes.memmove(buf, data, len(data))
@@ -341,7 +341,7 @@ class VixDiskLibHandle:
         disk_handle: _DiskHandle,
         start_sector: int,
         num_sectors: int,
-        buf: Union[ctypes.Array, bytes, bytearray, memoryview],
+        buf: ctypes.Array | bytes | bytearray | memoryview,
     ) -> None:
         """Write ``num_sectors`` from ``buf`` starting at ``start_sector``.
 

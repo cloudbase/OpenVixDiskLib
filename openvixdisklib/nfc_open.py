@@ -25,6 +25,7 @@ import os
 import socket
 import ssl
 import struct
+from typing import Self
 
 from openvixdisklib import fastlz
 from openvixdisklib.nfc_auth import NfcAuthSession, _ssl_client_context
@@ -384,7 +385,7 @@ class NfcDisk:
             except OSError:
                 pass
 
-    def __enter__(self) -> "NfcDisk":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -485,6 +486,7 @@ def open_disk(
         raise NotImplementedError(
             f"NFC compression type {compression} is not supported"
         )
+    sock: socket.socket
     if session.nfc_ssl:
         sock = wrap_nfcssl_socket(session.authd_sock, session.ticket.host)
     else:

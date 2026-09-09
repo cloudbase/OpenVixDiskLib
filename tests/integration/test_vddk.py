@@ -17,9 +17,11 @@ class TestVddk:
         read_buf = vixdisklib.get_buffer(SECTOR_SIZE)
         expected = pattern_bytes(SECTOR_SIZE, b"VDDK-S0")
         write_buf[:SECTOR_SIZE] = expected
-        with handle.connect(**lab.vixdisklib_connect_kwargs()) as conn:
-            with handle.open(conn, lab.disk_path, flags=0) as disk:
-                handle.write(disk, 0, 1, write_buf)
-                read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
-                handle.read(disk, 0, 1, read_buf)
-                assert read_buf.raw[:SECTOR_SIZE] == expected
+        with (
+            handle.connect(**lab.vixdisklib_connect_kwargs()) as conn,
+            handle.open(conn, lab.disk_path, flags=0) as disk,
+        ):
+            handle.write(disk, 0, 1, write_buf)
+            read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
+            handle.read(disk, 0, 1, read_buf)
+            assert read_buf.raw[:SECTOR_SIZE] == expected

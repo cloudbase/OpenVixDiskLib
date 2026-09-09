@@ -21,14 +21,16 @@ class TestNfcOpen:
     ) -> None:
         """Open the temp VMDK, write sector 0, and read it back."""
         expected = pattern_bytes(SECTOR_SIZE, b"NFC-OPEN-S0")
-        with lab.authenticate(read_only=False, nfc_ssl=nfc_ssl) as session:
-            with nfc_open.open_disk(
+        with (
+            lab.authenticate(read_only=False, nfc_ssl=nfc_ssl) as session,
+            nfc_open.open_disk(
                 session, lab.disk_path, read_only=False, compression=compression
-            ) as disk:
-                assert disk.path == lab.disk_path
-                assert disk.handle > 0
-                assert disk.sector_size == SECTOR_SIZE
-                disk.write(0, 1, expected)
-                got = disk.read(0, 1)
-                assert got is not expected
-                assert got == expected
+            ) as disk,
+        ):
+            assert disk.path == lab.disk_path
+            assert disk.handle > 0
+            assert disk.sector_size == SECTOR_SIZE
+            disk.write(0, 1, expected)
+            got = disk.read(0, 1)
+            assert got is not expected
+            assert got == expected

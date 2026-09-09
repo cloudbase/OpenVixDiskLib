@@ -17,10 +17,11 @@ with pyVmomi's type system and invoked through the same SOAP stub.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import socket
 import ssl
-from typing import Optional
+from typing import Self
 
 from pyVim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
@@ -45,12 +46,10 @@ def _register_nfc_types() -> None:
     global _NFC_TYPES_REGISTERED
     if _NFC_TYPES_REGISTERED:
         return
-    try:
+    with contextlib.suppress(Exception):
         GetVmodlType("vim.NfcService")
         _NFC_TYPES_REGISTERED = True
         return
-    except Exception:
-        pass
 
     CreateManagedType(
         "vim.NfcService",
@@ -136,7 +135,7 @@ def connect_vim(
     username: str,
     password: str,
     port: int = 443,
-    thumbprint: Optional[str] = None,
+    thumbprint: str | None = None,
     allow_untrusted: bool = False,
 ) -> vim.ServiceInstance:
     """Login to vCenter or ESXi using pyVim.connect.SmartConnect.
@@ -186,10 +185,10 @@ def _virtual_disk_key(vm: vim.VirtualMachine, disk_path: str) -> int:
 def get_nfc_ticket(
     si: vim.ServiceInstance,
     vm: vim.VirtualMachine,
-    disk_device_key: Optional[int] = None,
-    host_for_access: Optional[vim.HostSystem] = None,
+    disk_device_key: int | None = None,
+    host_for_access: vim.HostSystem | None = None,
     read_only: bool = True,
-    disk_path: Optional[str] = None,
+    disk_path: str | None = None,
 ) -> vim.HostServiceTicket:
     """Return a one-time NFC HostServiceTicket for ``vm``.
 
@@ -235,7 +234,7 @@ def get_ssl_cert_thumbprint(
     host: str,
     port: int = 443,
     digest_algorithm: str = "sha1",
-    ssl_context: Optional[ssl.SSLContext] = None,
+    ssl_context: ssl.SSLContext | None = None,
     timeout: float = 30.0,
 ) -> str:
     """Return the TLS certificate thumbprint of ``host``:``port``.
@@ -257,9 +256,11 @@ def get_ssl_cert_thumbprint(
     """
     if ssl_context is None:
         ssl_context = _ssl_client_context(verify=False)
-    with socket.create_connection((host, port), timeout=timeout) as sock:
-        with ssl_context.wrap_socket(sock, server_hostname=host) as ssock:
-            cert = ssock.getpeercert(binary_form=True)
+    with (
+        socket.create_connection((host, port), timeout=timeout) as sock,
+        ssl_context.wrap_socket(sock, server_hostname=host) as ssock,
+    ):
+        cert = ssock.getpeercert(binary_form=True)
     if not cert:
         raise ConnectionError(f"no peer certificate from {host}:{port}")
     return _format_thumbprint(hashlib.new(digest_algorithm, cert).digest())
@@ -341,7 +342,10 @@ def connect_authd(
 
     try:
         if not allow_untrusted and ticket.sslThumbprint:
-            peer = _sha1_thumbprint(ssock.getpeercert(True))
+            der_cert = ssock.getpeercert(True)
+            if not der_cert:
+                raise ConnectionError(f"no peer certificate from {host}:{port}")
+            peer = _sha1_thumbprint(der_cert)
             if _normalize_thumbprint(peer) != _normalize_thumbprint(
                 ticket.sslThumbprint
             ):
@@ -391,7 +395,7 @@ class NfcAuthSession:
         finally:
             Disconnect(self.si)
 
-    def __enter__(self) -> "NfcAuthSession":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -404,10 +408,10 @@ def authenticate(
     password: str,
     vm_moref: str,
     port: int = 443,
-    thumbprint: Optional[str] = None,
+    thumbprint: str | None = None,
     allow_untrusted: bool = False,
-    disk_device_key: Optional[int] = None,
-    disk_path: Optional[str] = None,
+    disk_device_key: int | None = None,
+    disk_path: str | None = None,
     read_only: bool = True,
     nfc_ssl: bool = True,
 ) -> NfcAuthSession:

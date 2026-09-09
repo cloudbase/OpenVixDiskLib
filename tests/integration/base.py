@@ -5,12 +5,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 import yaml
@@ -76,7 +77,7 @@ class LabEnv:
         )
 
     def vixdisklib_connect_kwargs(
-        self, extra: Optional[dict[str, Any]] = None
+        self, extra: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Return common ``VixDiskLib_ConnectEx`` arguments for the temp VM."""
         kwargs: dict[str, Any] = {
@@ -283,10 +284,8 @@ def create_lab_vm() -> LabEnv:
         )
     except Exception:
         if vm is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _wait_for_task(vm.Destroy_Task())
-            except Exception:
-                pass
         raise
     finally:
         Disconnect(si)

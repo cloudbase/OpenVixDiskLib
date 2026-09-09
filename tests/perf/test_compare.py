@@ -43,15 +43,17 @@ def _time_write_read(
     read_buf = module.get_buffer(len(payload))
     write_buf[: len(payload)] = payload
     kwargs = lab.vixdisklib_connect_kwargs(_connect_extra(lab, module, transport_mode))
-    with handle.connect(**kwargs) as conn:
-        with handle.open(conn, lab.disk_path, flags=flags) as disk:
-            started = time.perf_counter()
-            handle.write(disk, 0, n_sectors, write_buf)
-            write_s = time.perf_counter() - started
-            read_buf[: len(payload)] = b"\xa5" * len(payload)
-            started = time.perf_counter()
-            handle.read(disk, 0, n_sectors, read_buf)
-            read_s = time.perf_counter() - started
+    with (
+        handle.connect(**kwargs) as conn,
+        handle.open(conn, lab.disk_path, flags=flags) as disk,
+    ):
+        started = time.perf_counter()
+        handle.write(disk, 0, n_sectors, write_buf)
+        write_s = time.perf_counter() - started
+        read_buf[: len(payload)] = b"\xa5" * len(payload)
+        started = time.perf_counter()
+        handle.read(disk, 0, n_sectors, read_buf)
+        read_s = time.perf_counter() - started
     assert read_buf.raw[: len(payload)] == payload
     return write_s, read_s
 

@@ -3,7 +3,7 @@
 
 """Compare writes and reads from VDDK with openvixdisklib."""
 
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -12,7 +12,7 @@ from tests.integration import vixdisklib
 from tests.integration.base import SECTOR_AT_1GB, SECTOR_SIZE, LabEnv, pattern_bytes
 
 
-def _connect_extra(lab: LabEnv, module: Any) -> Optional[dict[str, Any]]:
+def _connect_extra(lab: LabEnv, module: Any) -> dict[str, Any] | None:
     """Return extra ``connect`` kwargs needed by ``module``."""
     if module is open_vix:
         return {"allow_untrusted": lab.allow_untrusted}
@@ -28,11 +28,13 @@ def _write_sectors(
     )
     buf = module.get_buffer(SECTOR_SIZE)
     kwargs = lab.vixdisklib_connect_kwargs(_connect_extra(lab, module))
-    with handle.connect(**kwargs) as conn:
-        with handle.open(conn, lab.disk_path, flags=flags) as disk:
-            for start, data in payloads.items():
-                buf[:SECTOR_SIZE] = data
-                handle.write(disk, start, 1, buf)
+    with (
+        handle.connect(**kwargs) as conn,
+        handle.open(conn, lab.disk_path, flags=flags) as disk,
+    ):
+        for start, data in payloads.items():
+            buf[:SECTOR_SIZE] = data
+            handle.write(disk, start, 1, buf)
 
 
 def _read_sectors(
@@ -45,12 +47,14 @@ def _read_sectors(
     buf = module.get_buffer(SECTOR_SIZE)
     result: dict[int, bytes] = {}
     kwargs = lab.vixdisklib_connect_kwargs(_connect_extra(lab, module))
-    with handle.connect(**kwargs) as conn:
-        with handle.open(conn, lab.disk_path, flags=flags) as disk:
-            for start in sectors:
-                buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
-                handle.read(disk, start, 1, buf)
-                result[start] = buf.raw[:SECTOR_SIZE]
+    with (
+        handle.connect(**kwargs) as conn,
+        handle.open(conn, lab.disk_path, flags=flags) as disk,
+    ):
+        for start in sectors:
+            buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
+            handle.read(disk, start, 1, buf)
+            result[start] = buf.raw[:SECTOR_SIZE]
     return result
 
 

@@ -82,7 +82,7 @@ def get_buffer(size):
     return ctypes.create_string_buffer(size)
 
 
-class VixDiskLibHandle(object):
+class VixDiskLibHandle:
     """Class which acts as a proxy for vixDiskLib-related operations:"""
 
     def __init__(self, config_path=None, vixdisklib_compatibility_version=None):
@@ -130,7 +130,7 @@ class VixDiskLibHandle(object):
                 )
 
         if not version_used:
-            raise Exception(
+            raise RuntimeError(
                 "Could not initialize vixDiskLib with any of the following "
                 "versions: %s" % target_versions
             )
@@ -234,7 +234,9 @@ class VixDiskLibHandle(object):
         self._vix_disklib.VixDiskLib_Exit.argtypes = []
         self._vix_disklib.VixDiskLib_Exit.restype = None
 
-    def _check_err(self, err, allowed_values=[vix_disklib_errors.VIX_OK]):
+    def _check_err(self, err, allowed_values=None):
+        if allowed_values is None:
+            allowed_values = [vix_disklib_errors.VIX_OK]
         if err not in allowed_values:
             err_msg = self._vix_disklib.VixDiskLib_GetErrorText(err, None)
             err_msg_copy = str(ctypes.cast(err_msg, ctypes.c_char_p).value.decode())
@@ -279,7 +281,7 @@ class VixDiskLibHandle(object):
                 LOG.debug("Original vixDiskLib error message: %s", err_msg_copy)
                 err_msg = msg
 
-            raise Exception(err_msg)
+            raise RuntimeError(err_msg)
 
     def get_transport_modes(self):
         transport_modes = self._vix_disklib.VixDiskLib_ListTransportModes()

@@ -55,15 +55,17 @@ class TestOpenvixdisklib:
             SECTOR_AT_1GB: pattern_bytes(SECTOR_SIZE, b"OVDL-1GB"),
         }
         assert handle.get_transport_modes() == ["nbdssl", "nbd"]
-        with handle.connect(**connect_kwargs) as conn:
-            with handle.open(conn, lab.disk_path, flags=open_flags) as disk:
-                assert handle.get_transport_mode(disk) == transport_mode
-                for start, expected in patterns.items():
-                    write_buf[:SECTOR_SIZE] = expected
-                    handle.write(disk, start, 1, write_buf)
-                    read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
-                    handle.read(disk, start, 1, read_buf)
-                    assert read_buf.raw[:SECTOR_SIZE] == expected
+        with (
+            handle.connect(**connect_kwargs) as conn,
+            handle.open(conn, lab.disk_path, flags=open_flags) as disk,
+        ):
+            assert handle.get_transport_mode(disk) == transport_mode
+            for start, expected in patterns.items():
+                write_buf[:SECTOR_SIZE] = expected
+                handle.write(disk, start, 1, write_buf)
+                read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
+                handle.read(disk, start, 1, read_buf)
+                assert read_buf.raw[:SECTOR_SIZE] == expected
 
     def test_read_only_open_snapshot_parent(self, lab: LabEnv) -> None:
         """Read-only Open uses NfcGetVmFiles, including a snapshot parent path.
@@ -92,15 +94,19 @@ class TestOpenvixdisklib:
         read_flags = vixdisklib.VIXDISKLIB_FLAG_OPEN_READ_ONLY
 
         def read_sector(path: str) -> bytes:
-            with handle.connect(**read_kwargs) as conn:
-                with handle.open(conn, path, flags=read_flags) as disk:
-                    read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
-                    handle.read(disk, 0, 1, read_buf)
+            with (
+                handle.connect(**read_kwargs) as conn,
+                handle.open(conn, path, flags=read_flags) as disk,
+            ):
+                read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
+                handle.read(disk, 0, 1, read_buf)
             return read_buf.raw[:SECTOR_SIZE]
 
-        with handle.connect(**write_kwargs) as conn:
-            with handle.open(conn, lab.disk_path, flags=0) as disk:
-                handle.write(disk, 0, 1, write_buf)
+        with (
+            handle.connect(**write_kwargs) as conn,
+            handle.open(conn, lab.disk_path, flags=0) as disk,
+        ):
+            handle.write(disk, 0, 1, write_buf)
 
         assert read_sector(lab.disk_path) == expected
 
