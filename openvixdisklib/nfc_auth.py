@@ -145,11 +145,21 @@ def connect_vim(
         password: VIM password.
         port: HTTPS port, usually 443.
         thumbprint: Optional SHA-1 SSL thumbprint of the management endpoint.
+            When set, the peer certificate is pinned to this digest and the
+            system CA store is not used. pyVmomi's version-discovery GET
+            does not pin, so a self-signed vCenter fails CA verification
+            before SOAP login unless that handshake is skipped after the
+            pin check.
         allow_untrusted: If True, skip certificate validation.
     """
-    ssl_context = None
-    if allow_untrusted:
-        ssl_context = _ssl_client_context(verify=False)
+    if thumbprint and not allow_untrusted:
+        peer = get_ssl_cert_thumbprint(host, port)
+        if _normalize_thumbprint(peer) != _normalize_thumbprint(thumbprint):
+            raise ConnectionError(
+                f"management SSL thumbprint mismatch: got {peer}, expected {thumbprint}"
+            )
+    skip_ca = allow_untrusted or bool(thumbprint)
+    ssl_context = _ssl_client_context(verify=False) if skip_ca else None
     return SmartConnect(
         host=host,
         user=username,
@@ -157,7 +167,7 @@ def connect_vim(
         port=port,
         thumbprint=thumbprint,
         sslContext=ssl_context,
-        disableSslCertValidation=allow_untrusted,
+        disableSslCertValidation=skip_ca,
     )
 
 

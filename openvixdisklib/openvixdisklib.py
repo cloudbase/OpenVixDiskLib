@@ -214,6 +214,8 @@ class VixDiskLibHandle:
         Args:
             server_name: vCenter or ESXi hostname/IP.
             thumbprint: SHA-1 thumbprint of the management TLS certificate.
+                When set, the certificate is pinned and need not be in
+                the system CA store.
             username: VIM user name.
             password: VIM password.
             vmx_spec: VM selector, ``moref=vm-…``.
@@ -224,6 +226,8 @@ class VixDiskLibHandle:
                 ``nbdssl``.
             port: HTTPS port, usually 443.
             allow_untrusted: Skip management TLS verification when True.
+                When False with no ``thumbprint``, the system CA store
+                is used.
         """
         LOG.debug(
             "Connecting VixDiskLib: server_name=%s thumbprint=%s "
