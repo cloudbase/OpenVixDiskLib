@@ -37,12 +37,35 @@ wrong wire command until the intercept existed.
 | pyVmomi                 | `.venv`                                                              |
 | Known-good VDDK client  | `tests/integration/test_vddk.py` / `tests/integration/vixdisklib.py` |
 | Verbose NFC logs        | `vixDiskLib.nfc.LogLevel=4` in a temp VDDK config                    |
-| ctypes Open+Read driver | `/tmp/vddk_open_trace.py` (not in the library)                       |
+| ctypes capture drivers  | `docs/probing_samples/` (not library code)                           |
 | SSL / `write` hook      | `/tmp/sslhook.c` → `/tmp/sslhook.so`                                 |
+| Pickled `LabEnv`        | `/tmp/vddk-write-wire-lab.pkl` during hooked captures only           |
 
 Always set `LD_LIBRARY_PATH` to `.vddk/` so VDDK uses its own
 `libssl.so.3`. Unset `LD_PRELOAD` before running the Python replacement;
 a leftover `write` hook will crash pyVmomi’s TLS.
+
+## Tools
+
+tcpdump was the first capture attempt and is the wrong tool for TLS
+stages (Step 3). Everything that actually produced protocol bytes or
+names is in this table.
+
+| Tool                                     | What it was used for                                              | Limitation                                                         |
+| ---------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------ |
+| tcpdump on 443 / 902                     | Prove VDDK talks to vCenter then ESXi:902; see TLS record sizes   | Ciphertext only: no SOAP, authd lines, or NFC headers              |
+| `strings -a` on `.vddk/*.so`             | Candidate tokens (`SESSION`, `NfcGetVmFiles`, `NFC_AIO_MSG_*`)    | Not command order, spacing, or replies                             |
+| `nm -D` / `objdump -T`                   | Which library imports `SSL_write` vs `write`; exported APIs       | Not wire layout                                                    |
+| VDDK `vixDiskLib.nfc.LogLevel=4`         | Function names and AIO `opId` / `type` / `size` to label a frame  | Not magic numbers, path placement, or `BANNER \r\n`                |
+| `LD_PRELOAD` SSL / `write` hook          | Plaintext of SOAP, authd, and (after PROXY) NFC on fd 902         | Must not stay on the replacement process; `docs/ssl_hook.md`       |
+| `strace -f -x` on `write` / `send*`      | First writable NFC capture without rebuilding the hook (Step 10)  | Noisy; TLS still opaque; `-s` truncates large extras               |
+| `pickle` of `LabEnv`                     | Create the temp VM unhooked, then load it under the hook          | `/tmp` only; never commit pickles (lab host and credentials)       |
+| ctypes drivers in `docs/probing_samples/` | Repeatable `ConnectEx` / `Open` / `Read` / `Write` under capture | Not library code                                                   |
+
+`ltrace` was considered for OpenSSL and libc `write`. It was not used:
+VDDK is stripped enough that `strace` on syscalls plus the `LD_PRELOAD`
+hook were enough. An ESXi impersonator (`AGENTS.md`) was also not
+needed; the lab already answered VDDK.
 
 ## Step 1 — Map the public VDDK calls
 
@@ -196,6 +219,11 @@ Classic NFC uses a 264-byte padded struct; AIO uses a 16-byte header
 (`magic 0xA100DA7A`) plus payload; path / DDB key / sector data are
 extra writes not included in `size`.
 
+`strace` is a usable second view of this same plaintext NFC path when
+the hook is not loaded. It cannot replace the hook for TLS (authd and
+SOAP). How it was run, and why pickle sits between VM create and the
+hooked VDDK process, is in Step 10.
+
 ## Step 8 — Replay the smallest subset, then compare to VDDK
 
 Python must **dup the authd fd** and send NFC as raw TCP.
@@ -233,7 +261,59 @@ Proof: `tests/integration/test_nfc_read_write.py` writes a known pattern
 (including a 129-sector read that must assemble two fragments) and
 checks the bytes that came back.
 
-## Step 10 — Writes from the same IO message
+## Step 10 — Writes: `strace`, then the same IO message
+
+The first writable Open was captured with **`strace`**, not the SSL
+hook. After `PROXY`, NBD NFC is ordinary `write` / `read` on the authd
+fd (`useSSL=0`). `strace` dumps those buffers as hex without compiling
+`sslhook.so`. TLS to vCenter and the authd handshake stay ciphertext
+in the same log, so this is only useful once Step 7 has already shown
+that NFC is plaintext.
+
+```bash
+unset LD_PRELOAD
+export LD_LIBRARY_PATH=…/.vddk
+strace -f -x -s 2048 \
+  -e trace=write,writev,send,sendto,sendmsg \
+  -o /tmp/vddk_write.strace \
+  python docs/probing_samples/vddk_write_trace.py
+```
+
+| Flag                 | Why                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| `-f`                 | VDDK I/O runs on worker threads; without it the NFC `write` is missing               |
+| `-x`                 | Hex, so AIO magic and binary payloads are searchable                                 |
+| `-s 2048`            | Fits a 264-byte classic frame plus a 44-byte IO header and one 512-byte sector. Truncates 64 KiB extras; use the hook for those |
+| `-e trace=write,…`   | Drop `open`/`mmap` noise. Still includes Python logging writes                       |
+
+Parse offline: search for AIO magic `7a da 00 a1` (little-endian
+`0xA100DA7A`), then keep the fd that also sent 264-byte frames or
+`PROXY`. That stream showed:
+
+- `OPEN_FILE` flags `0x1a` (read-write), not the read-only `0x1e`
+- IO direction `0` at payload offset 8 (read is `1`)
+- 44-byte IO header and the sector extra in **one** `write`
+
+Later write captures (64 KiB fragments, FastLZ) used the port-902
+`write`/`read` hook instead, because `-s` would clip the extra. To keep
+pyVmomi’s TLS off that hook, the temp VM was created in a **separate
+process** and the `LabEnv` was pickled:
+
+```python
+# Process A: no LD_PRELOAD (VIM login + CreateVM)
+lab = create_lab_vm()
+with open("/tmp/vddk-write-wire-lab.pkl", "wb") as f:
+    pickle.dump(lab, f)
+
+# Process B: LD_PRELOAD=/tmp/sslhook.so, SSLHOOK_LOG=…
+with open("/tmp/vddk-write-wire-lab.pkl", "rb") as f:
+    lab = pickle.load(f)
+# VixDiskLib_ConnectEx / Open / Write on lab.disk_path
+```
+
+Pickles lived under `/tmp` only. They contain lab host, credentials,
+and the VM moref; do not commit them. Destroy the VM in an unhooked
+process after the capture (`destroy_lab_vm`).
 
 `VixDiskLib_Write` uses the same 44-byte `NFC_AIO_MSG_IO` layout as
 read. The direction field at offset 8 is `0` instead of `1`, and the

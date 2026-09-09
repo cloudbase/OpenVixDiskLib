@@ -17,6 +17,7 @@ NFC client.
 | Approach                         | What it shows                                      | Gap                                              |
 | -------------------------------- | -------------------------------------------------- | ------------------------------------------------ |
 | tcpdump on 443 / 902             | TLS records                                        | No SOAP bodies, no authd lines, no NFC frames    |
+| `strace` on `write` / `send*`    | Plaintext NFC **after** PROXY (`useSSL=0`)         | TLS still opaque; `-s` truncates large extras    |
 | `vixDiskLib.nfc.LogLevel=4`      | Function names, `opId` / `type` / `size`           | Not the bytes on the wire                        |
 | Strings in `libvixDiskLib.so`    | Command tokens (`SESSION`, `PROXY`, `BANNER`)      | Not order, spacing, or replies                   |
 | SSL hook on `SSL_write`/`read`   | Exact buffers before encrypt / after decrypt       | Must split connections and reassemble 1-byte I/O |
