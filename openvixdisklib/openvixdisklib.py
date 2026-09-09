@@ -225,7 +225,19 @@ class VixDiskLibHandle:
             port: HTTPS port, usually 443.
             allow_untrusted: Skip management TLS verification when True.
         """
-        LOG.debug("Connecting VixDiskLib: %s", server_name)
+        LOG.debug(
+            "Connecting VixDiskLib: server_name=%s thumbprint=%s "
+            "vmx_spec=%s snapshot_ref=%s read_only=%s transport_modes=%s "
+            "port=%s allow_untrusted=%s",
+            server_name,
+            thumbprint,
+            vmx_spec,
+            snapshot_ref,
+            read_only,
+            transport_modes,
+            port,
+            allow_untrusted,
+        )
         transport_mode = _select_transport(transport_modes)
         vm_moref = _parse_vm_moref(vmx_spec)
         si = nfc_auth.connect_vim(
