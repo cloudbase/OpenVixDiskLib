@@ -100,6 +100,12 @@ tox -e integration
 .venv/bin/pytest tests/integration
 ```
 
+Some tests are marked as ``slow`` and skipped unless you pass ``--runslow``:
+
+```bash
+tox -e integration -- --runslow
+```
+
 Compare write/read throughput of openvixdisklib and native VDDK
 (`64KiB`, 129-sector, and `32MiB` transfers; `nbdssl` and `nbd`;
 plain and FastLZ):
