@@ -48,7 +48,9 @@
   run and destroys it at session end. Run them with
   `tox -e integration` or
   `.venv/bin/pytest tests/integration`. Throughput comparison against
-  native VDDK lives under `tests/perf/` (`tox -e perf`).
+  native VDDK lives under `tests/perf/` (`tox -e perf`). Repeated
+  connect/open/close leak checks live under `tests/stress/`
+  (`tox -e stress`).
 
 
 ## Other rules

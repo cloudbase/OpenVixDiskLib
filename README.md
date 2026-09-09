@@ -69,6 +69,7 @@ VDDK-shaped handle.
 | `openvixdisklib/fastlz.py`         | FastLZ NFC adapter (pip `pyfastlz`)                    |
 | `tests/integration/`               | Live pytest suite against a lab vCenter                |
 | `tests/perf/`                      | Throughput comparison of openvixdisklib vs VDDK        |
+| `tests/stress/`                    | Repeated connect/open/close leak check                 |
 | `tests/integration/vixdisklib.py`  | Native VDDK wrapper used only to cross-check           |
 | `docs/`                            | Protocol notes and reverse-engineering steps           |
 
@@ -112,6 +113,14 @@ plain and FastLZ):
 
 ```bash
 tox -e perf
+```
+
+Repeat ``connect`` / ``open`` / write-read one sector / ``close`` /
+``disconnect`` 200 times (one process, sequential, like many VMs) and
+assert the fd count does not grow:
+
+```bash
+tox -e stress
 ```
 
 VDDK cross-check tests skip when `libvixDiskLib` is not loadable from
