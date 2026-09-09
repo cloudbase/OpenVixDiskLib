@@ -1,5 +1,5 @@
 line-length = 88
-target-version = "py312"
+target-version = "py310"
 
 [lint]
 # UP031: Allow percent formatting for now.
@@ -8,4 +8,5 @@ target-version = "py312"
 # BLE001: we'll allow catching Exception for now.
 # RUF015: enforces next() to be used when getting the first item of a list,
 #         may be enabled at a later time.
-ignore = ["UP031", "PIE790", "RUF100", "BLE001", "RUF015"]
+# PYI034: typing.Self requires Python 3.11; return the class instead.
+ignore = ["UP031", "PIE790", "RUF100", "BLE001", "RUF015", "PYI034"]

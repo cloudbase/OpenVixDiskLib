@@ -25,7 +25,6 @@ import os
 import socket
 import ssl
 import struct
-from typing import Self
 
 from openvixdisklib import fastlz
 from openvixdisklib.nfc_auth import NfcAuthSession, _ssl_client_context
@@ -385,7 +384,7 @@ class NfcDisk:
             except OSError:
                 pass
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> NfcDisk:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

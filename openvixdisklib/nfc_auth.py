@@ -21,7 +21,6 @@ import contextlib
 import hashlib
 import socket
 import ssl
-from typing import Self
 
 from pyVim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
@@ -395,7 +394,7 @@ class NfcAuthSession:
         finally:
             Disconnect(self.si)
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> NfcAuthSession:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

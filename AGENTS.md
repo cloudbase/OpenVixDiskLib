@@ -33,7 +33,7 @@
 
 ## Architecture
 
-- The project uses Python and must be Python 3.12 compatible.
+- The project uses Python and must be Python 3.12 and Python 3.10 compatible.
 - Library code lives in the `openvixdisklib` package (`nfc_auth`, `nfc_open`,
   `openvixdisklib`).
 - The `.vddk` dir contains the VDDK libraries and their dependencies, including

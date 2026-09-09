@@ -22,10 +22,12 @@ Not implemented: compression open flags other than FastLZ, CBT /
 allocated-block queries, disk geometry (`DDB_GET`), encrypted disks,
 and direct ESXi `ha-nfc` without vCenter `vpxa-nfc`.
 
+Requires Python 3.10 or later.
+
 ## Install
 
 ```bash
-python3.12 -m venv .venv
+python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
 
