@@ -132,15 +132,34 @@ def _enable_tcp_nodelay(sock: socket.socket) -> None:
 
 
 def _recvn(sock: socket.socket, size: int) -> bytes:
-    buf = bytearray()
-    while len(buf) < size:
-        chunk = sock.recv(size - len(buf))
-        if not chunk:
-            raise NfcProtocolError(
-                f"NFC connection closed, needed {size} bytes, got {len(buf)}"
-            )
-        buf.extend(chunk)
+    buf = bytearray(size)
+    _recvn_into(sock, memoryview(buf))
     return bytes(buf)
+
+
+def _recvn_into(sock: socket.socket, buf: memoryview) -> None:
+    """Read exactly ``len(buf)`` bytes into ``buf``."""
+    view = buf.cast("B") if buf.format != "B" else buf
+    filled = 0
+    n = len(view)
+    while filled < n:
+        got = sock.recv_into(view[filled:n])
+        if not got:
+            raise NfcProtocolError(
+                f"NFC connection closed, needed {n} bytes, got {filled}"
+            )
+        filled += got
+
+
+def _writable_bytes(buf: bytearray | memoryview, length: int) -> memoryview:
+    """Return a writable ``B`` view of the first ``length`` bytes of ``buf``."""
+    view = buf if isinstance(buf, memoryview) else memoryview(buf)
+    if view.readonly:
+        raise TypeError("read buffer is read-only")
+    raw = view.cast("B") if view.format != "B" else view
+    if len(raw) < length:
+        raise RuntimeError(f"read buffer is {len(raw)} bytes, need {length}")
+    return raw[:length]
 
 
 def _send_nfc_msg(sock: socket.socket, msg_type: int, body: bytes = b"") -> None:
@@ -257,7 +276,36 @@ class NfcDisk:
         """
         if num_sectors < 1:
             raise ValueError("num_sectors must be at least 1")
+        buf = bytearray(num_sectors * self.sector_size)
+        self.readinto(start_sector, num_sectors, buf)
+        return bytes(buf)
+
+    def readinto(
+        self,
+        start_sector: int,
+        num_sectors: int,
+        buf: bytearray | memoryview,
+    ) -> int:
+        """Read ``num_sectors`` into ``buf`` starting at ``start_sector``.
+
+        Uncompressed fragments are received directly into ``buf``. FastLZ
+        still decompresses into a temporary buffer, then copies the
+        result. ``buf`` must be writable and at least
+        ``num_sectors * sector_size`` bytes (a ``get_buffer`` ctypes
+        array is wrapped with ``memoryview`` by the VDDK-shaped handle).
+
+        Args:
+            start_sector: Sector offset from the start of the disk.
+            num_sectors: Number of sectors to read.
+            buf: Destination buffer.
+
+        Returns:
+            The number of bytes written to ``buf``.
+        """
+        if num_sectors < 1:
+            raise ValueError("num_sectors must be at least 1")
         length = num_sectors * self.sector_size
+        data = _writable_bytes(buf, length)
         offset = start_sector * self.sector_size
         opcode = NFC_AIO_IO_READ | (self.compression << 32)
         payload = struct.pack(
@@ -265,7 +313,6 @@ class NfcDisk:
         )
         op_id = self._next_op_id()
         self._sock.sendall(_pack_aio_hdr(NFC_AIO_MSG_IO, len(payload), op_id) + payload)
-        data = bytearray(length)
         filled = 0
         seen: set[int] = set()
         while filled < length:
@@ -293,6 +340,7 @@ class NfcDisk:
                 )
             seen.add(dest)
             ctype = opcode >> 32
+            chunk_view = data[dest : dest + chunk_len]
             if ctype == NFC_COMPRESSION_FASTLZ:
                 comp_len = struct.unpack_from("<I", body, 36)[0]
                 extra = _recvn(self._sock, comp_len)
@@ -306,13 +354,13 @@ class NfcDisk:
                     raise NfcProtocolError(
                         f"FastLZ read got {len(chunk)} bytes, expected {chunk_len}"
                     )
+                chunk_view[:] = chunk
             elif ctype == NFC_COMPRESSION_NONE:
-                chunk = _recvn(self._sock, chunk_len)
+                _recvn_into(self._sock, chunk_view)
             else:
                 raise NfcProtocolError(f"unsupported NFC IO compression type {ctype}")
-            data[dest : dest + chunk_len] = chunk
             filled += chunk_len
-        return bytes(data)
+        return length
 
     def write(self, start_sector: int, num_sectors: int, data: bytes) -> None:
         """Write ``num_sectors`` starting at ``start_sector``.

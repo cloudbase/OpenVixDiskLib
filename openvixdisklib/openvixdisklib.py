@@ -331,14 +331,9 @@ class VixDiskLibHandle:
             start_sector: First sector to read.
             num_sectors: Number of sectors to read.
             buf: Destination buffer (``get_buffer`` or a writable bytes-like).
+                Uncompressed NFC extra is received into this buffer.
         """
-        data = disk_handle.disk.read(start_sector, num_sectors)
-        if isinstance(buf, (bytearray, memoryview)):
-            if len(buf) < len(data):
-                raise RuntimeError(f"read buffer is {len(buf)} bytes, need {len(data)}")
-            buf[: len(data)] = data
-            return
-        ctypes.memmove(buf, data, len(data))
+        disk_handle.disk.readinto(start_sector, num_sectors, memoryview(buf))
 
     def write(
         self,
