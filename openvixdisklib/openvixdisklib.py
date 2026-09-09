@@ -246,14 +246,14 @@ class VixDiskLibHandle:
             password,
             port=port,
             thumbprint=thumbprint,
-            allow_untrusted=allow_untrusted or not thumbprint,
+            allow_untrusted=allow_untrusted,
         )
         conn = _Connection(
             si,
             vm_moref,
             snapshot_ref,
             thumbprint,
-            allow_untrusted or not thumbprint,
+            allow_untrusted,
             read_only,
             transport_mode,
         )
