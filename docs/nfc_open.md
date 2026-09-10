@@ -1,8 +1,8 @@
 # VDDK NFC disk open
 
 This document records how VMware VDDK opens a VMDK over NBD/NFC after
-the authd handshake in `docs/nfc_auth.md`, and how
-`openvixdisklib/nfc_open.py` reproduces that path. Findings come from
+the authd handshake in `docs/nfc_auth.md`, and how OpenVixDiskLib
+(`openvixdisklib/nfc_open.py`) reproduces that path. Findings come from
 VDDK 8.0.2 verbose logs
 (`vixDiskLib.nfc.LogLevel=4`) plus an `LD_PRELOAD` intercept of
 `write` / `read` on the ESXi:902 file descriptor. Capture method:
@@ -203,7 +203,7 @@ and `docs/nfc_write.md`. `NfcDisk.read` / `NfcDisk.write` match
 `CLOSE_FILE` (handle as `uint64`), `CLOSE_SESSION` (`uint32` 0), then
 classic type 4 `NFC_SESSION_COMPLETE`.
 
-## Python replacement
+## OpenVixDiskLib
 
 | Piece                         | Module                                          |
 | ----------------------------- | ----------------------------------------------- |

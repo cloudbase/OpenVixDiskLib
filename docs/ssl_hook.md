@@ -9,8 +9,7 @@ This project used a small `LD_PRELOAD` library (`sslhook.c`, built to
 `VixDiskLib_ConnectEx` / `VixDiskLib_Open`. The authd sequence in
 `docs/nfc_auth.md` was recovered from that log, not from VDDK source.
 
-The hook is a reverse-engineering aid. It is not part of the Python
-NFC client.
+The hook is a reverse-engineering aid. It is not part of OpenVixDiskLib.
 
 ## Why not tcpdump or VDDK logs
 
@@ -124,8 +123,8 @@ Details that only the hex dump made obvious:
 - `SESSION` has no reply; waiting for a line after it looks like a hang.
 - Ticket `sessionId` is the UUID string on the `SESSION` line.
 
-Those facts are written up in `docs/nfc_auth.md`. The Python client in
-`openvixdisklib/nfc_auth.py` replays this sequence; it does not use
+Those facts are written up in `docs/nfc_auth.md`. OpenVixDiskLib
+(`openvixdisklib/nfc_auth.py`) replays this sequence; it does not use
 the hook.
 
 After `200 Connect`, NFC is **not** on `SSL_write`. VDDK uses
@@ -142,5 +141,5 @@ skipped.
   `SSL *`.
 - It does not decode TLS handshakes, certificates, or SOAP envelopes;
   that is done offline on the hex log.
-- It must not ship in a production VDDK replacement. Keep it out of
+- It must not ship in OpenVixDiskLib. Keep it out of
   the library path used by `openvixdisklib/nfc_auth.py`.

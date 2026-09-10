@@ -1,7 +1,7 @@
 # VDDK NFC disk write
 
-This document records how `NfcDisk.write` in
-`openvixdisklib/nfc_open.py` implements `VixDiskLib_Write` over NFC AIO.
+This document records how OpenVixDiskLib (`NfcDisk.write` in
+`openvixdisklib/nfc_open.py`) implements `VixDiskLib_Write` over NFC AIO.
 The request layout matches the captured `VixDiskLib_Read` IO message in
 `docs/nfc_read.md` (write requests use the same fragment fields as
 read replies). Open flags and the IO direction field were taken
@@ -75,7 +75,7 @@ sends type `0` and raw extra. Each fragment is compressed on its own;
 a 32 MiB FastLZ write is 512 independent FastLZ extras, not one.
 
 Sector bytes follow the 44-byte payload and are **not** counted in AIO
-`size`. The replacement sends header + payload + extra in one
+`size`. OpenVixDiskLib sends header + payload + extra in one
 `sendall` and sets `TCP_NODELAY` on the NFC socket so a small FastLZ
 extra is not delayed behind Nagle / delayed ACK. Captured VDDK often
 uses two `write()`s (`60` then `65536`) for a 64 KiB fragment and
@@ -98,7 +98,7 @@ C: type=7 opId=14 size=44  total=66048 dest=65536 chunk=512    + 512 data
 S: type=7 opId=14 size=44  total=66048 dest=0     chunk=66048
 ```
 
-A 32 MiB write is 512 client fragments and one ACK. The Python client
+A 32 MiB write is 512 client fragments and one ACK. OpenVixDiskLib
 does the same. An earlier attempt that used a distinct `opId` per
 64 KiB chunk and a sliding window of 4–512 outstanding IOs was waiting
 for one reply per chunk; raising the window did not match VDDK
@@ -109,7 +109,7 @@ client merge of API writes. OPEN_SESSION is 16 zero bytes both ways, so
 the logged AIO buffer count of 4 is a VDDK client default
 (`vixDiskLib.nfcAio.Session.BufCount`), not a server cap.
 
-## Python replacement
+## OpenVixDiskLib
 
 `NfcDisk.write(start_sector, num_sectors, data)` in
 `openvixdisklib/nfc_open.py`. `open_disk(..., read_only=False)` selects
@@ -120,5 +120,5 @@ flags `0x1a`. The drop-in handle exposes the same shape as VDDK:
 Integration tests create an empty 10 GiB disk, write known patterns,
 and read them back (`tests/integration/test_nfc_read_write.py`,
 `tests/integration/test_openvixdisklib.py`). Cross-check tests write
-with VDDK and with the replacement and read with both
+with VDDK and with OpenVixDiskLib and read with both
 (`tests/integration/test_crosscheck.py`).

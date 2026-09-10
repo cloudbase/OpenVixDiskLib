@@ -1,7 +1,7 @@
 # VDDK NFC authentication
 
 This document records how VMware VDDK authenticates for NBD/NFC disk
-access, and how the Python replacement in `openvixdisklib/nfc_auth.py`
+access, and how OpenVixDiskLib (`openvixdisklib/nfc_auth.py`)
 reproduces that path. Findings come from VDDK 8.0.2 libraries
 (`libvixDiskLib`, `libvddkVimAccess`, `libvim-types`), live SOAP calls
 against vCenter
@@ -54,7 +54,7 @@ rather than crafting SOAP.
 - SOAPAction: `"urn:vim25/8.0.1.0"` (negotiated)
 
 VDDK logs this as `Connected to VIM Server` / `Authenticating user` /
-`Logged in!`. The Python replacement keeps that `ServiceInstance` and
+`Logged in!`. OpenVixDiskLib keeps that `ServiceInstance` and
 its stub for the ticket call.
 
 Direct ESXi login is the same SOAP login against hostd, but the NFC
@@ -76,10 +76,10 @@ ships. vCenter still implements it:
 `ServiceManager.QueryServiceList` does **not** list NFC. The moref is
 hardcoded in VDDK as `nfcService` (vCenter) or `ha-nfc` (ESXi).
 
-`openvixdisklib/nfc_auth.py` registers the missing type with
-`pyVmomi.VmomiSupport.CreateManagedType` and invokes it on the existing
-SmartConnect stub, so serialization, cookies, and `HostServiceTicket`
-stay in pyVmomi.
+OpenVixDiskLib (`openvixdisklib/nfc_auth.py`) registers the missing
+type with `pyVmomi.VmomiSupport.CreateManagedType` and invokes it on
+the existing SmartConnect stub, so serialization, cookies, and
+`HostServiceTicket` stay in pyVmomi.
 
 ### Methods VDDK actually calls
 
@@ -253,7 +253,7 @@ are for local ESXi credentials. With a vCenter ticket:
 argument is not what VDDK sends. The SHA-1 value is for verifying the
 TLS certificate, not for the `THUMBPRINT_SHA2` command.
 
-## Python replacement
+## OpenVixDiskLib
 
 | Piece                | Module                                   | Reuses pyVmomi?                    |
 | -------------------- | ---------------------------------------- | ---------------------------------- |
@@ -282,6 +282,6 @@ and asserts an established TLS socket on `ticket.host:ticket.port`.
 
 Authentication stops at `200 Connect ha-nfc` (NBD) or `200 Connect
 ha-nfcssl` (NBDSSL). Opening the VMDK and reading or writing sectors is
-documented in `docs/nfc_open.md` and implemented in
-`openvixdisklib/nfc_open.py`. The datastore path is consumed there
+documented in `docs/nfc_open.md` and implemented in OpenVixDiskLib
+(`openvixdisklib/nfc_open.py`). The datastore path is consumed there
 (and, for writes, as `diskDeviceKey` on the ticket).

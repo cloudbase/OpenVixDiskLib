@@ -1,9 +1,10 @@
 # VDDK NFC disk read
 
 This document records how VMware VDDK reads VMDK sectors over NBD/NFC
-after the open in `docs/nfc_open.md`, and how `NfcDisk.read` in
-`openvixdisklib/nfc_open.py` reproduces `VixDiskLib_Read`. Capture
-method: `docs/reverse_engineering_procedure.md`.
+after the open in `docs/nfc_open.md`, and how OpenVixDiskLib
+(`NfcDisk.read` in `openvixdisklib/nfc_open.py`) reproduces
+`VixDiskLib_Read`. Capture method:
+`docs/reverse_engineering_procedure.md`.
 
 ## Mapping from VDDK
 
@@ -51,8 +52,8 @@ Little-endian, after the usual 16-byte AIO header
 
 An earlier guess that offset 36 was `NFC_DISK` (`2`) was wrong: a
 1-sector VDDK read puts `512` in both `uint32` length fields. A Python
-read that sent `(512, 2, 0)` still worked for one sector; the
-replacement now matches VDDK.
+read that sent `(512, 2, 0)` still worked for one sector; OpenVixDiskLib
+now matches VDDK.
 
 `VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ` does not change OPEN_FILE
 flags. The IO opcode at offset 8 is a `uint64`: low 32 bits are still
@@ -121,7 +122,7 @@ back. An unwritten region is zeros.
 Writes use the same 44-byte IO payload with opcode `2`; see
 `docs/nfc_write.md`.
 
-## Python replacement
+## OpenVixDiskLib
 
 `NfcDisk.read(start_sector, num_sectors)` in
 `openvixdisklib/nfc_open.py`. Run:

@@ -1,7 +1,7 @@
 # Reverse-engineering procedure
 
-This is the working method used to replace VDDK’s NBD path with a Python
-implementation. Protocol details live in `docs/nfc_auth.md`,
+This is the working method used to replace VDDK’s NBD path with
+OpenVixDiskLib. Protocol details live in `docs/nfc_auth.md`,
 `docs/nfc_open.md`, `docs/nfc_read.md`, and `docs/nfc_write.md`.
 The capture tool is described in `docs/ssl_hook.md`.
 This file is the **sequence of steps**, including dead ends, so later
@@ -42,7 +42,7 @@ wrong wire command until the intercept existed.
 | Pickled `LabEnv`        | `/tmp/vddk-write-wire-lab.pkl` during hooked captures only           |
 
 Always set `LD_LIBRARY_PATH` to `.vddk/` so VDDK uses its own
-`libssl.so.3`. Unset `LD_PRELOAD` before running the Python replacement;
+`libssl.so.3`. Unset `LD_PRELOAD` before running OpenVixDiskLib;
 a leftover `write` hook will crash pyVmomi’s TLS.
 
 ## Tools
@@ -57,7 +57,7 @@ names is in this table.
 | `strings -a` on `.vddk/*.so`             | Candidate tokens (`SESSION`, `NfcGetVmFiles`, `NFC_AIO_MSG_*`)    | Not command order, spacing, or replies                             |
 | `nm -D` / `objdump -T`                   | Which library imports `SSL_write` vs `write`; exported APIs       | Not wire layout                                                    |
 | VDDK `vixDiskLib.nfc.LogLevel=4`         | Function names and AIO `opId` / `type` / `size` to label a frame  | Not magic numbers, path placement, or `BANNER \r\n`                |
-| `LD_PRELOAD` SSL / `write` hook          | Plaintext of SOAP, authd, and (after PROXY) NFC on fd 902         | Must not stay on the replacement process; `docs/ssl_hook.md`       |
+| `LD_PRELOAD` SSL / `write` hook          | Plaintext of SOAP, authd, and (after PROXY) NFC on fd 902         | Must not stay on the OpenVixDiskLib process; `docs/ssl_hook.md`    |
 | `strace -f -x` on `write` / `send*`      | First writable NFC capture without rebuilding the hook (Step 10)  | Noisy; TLS still opaque; `-s` truncates large extras               |
 | `pickle` of `LabEnv`                     | Create the temp VM unhooked, then load it under the hook          | `/tmp` only; never commit pickles (lab host and credentials)       |
 | ctypes drivers in `docs/probing_samples/` | Repeatable `ConnectEx` / `Open` / `Read` / `Write` under capture | Not library code                                                   |
@@ -172,7 +172,7 @@ parameter names and which moref vCenter accepts:
   ticket. `GetVmFiles` plus `OPEN_FILE` flags `0x1a` fails with
   `VIX_E_FILE_READ_ONLY` (`0x0b`).
 
-The replacement registers those methods and calls them through pyVmomi.
+OpenVixDiskLib registers those methods and calls them through pyVmomi.
 It does not ship a hand-rolled SOAP client for login or tickets.
 
 ## Step 6 — Probe authd; record dead ends
@@ -230,10 +230,10 @@ Python must **dup the authd fd** and send NFC as raw TCP.
 `SSLSocket.send` would encrypt; `unwrap()` would `SSL_shutdown`. VDDK
 does neither.
 
-`openvixdisklib/nfc_open.py` replays handshake + AIO `OPEN_SESSION` /
-sockopts / resource pool / `OPEN_FILE`. VDDK’s extra `DDB_GET` keys
-were omitted once a file handle was enough to read. Proof of open:
-`tests/integration/test_nfc_open.py`.
+OpenVixDiskLib (`openvixdisklib/nfc_open.py`) replays handshake + AIO
+`OPEN_SESSION` / sockopts / resource pool / `OPEN_FILE`. VDDK’s extra
+`DDB_GET` keys were omitted once a file handle was enough to read. Proof
+of open: `tests/integration/test_nfc_open.py`.
 
 Do not copy every VDDK message. Copy what the server requires for the
 Python API you are replacing.
@@ -395,8 +395,8 @@ After a stage works:
 | `docs/ssl_hook.md`                      | Capture tool only                             |
 | `docs/reverse_engineering_procedure.md` | This procedure (update when the method changes) |
 
-Keep the hook and ctypes driver under `/tmp`. They are not part of the
-replacement library.
+Keep the hook and ctypes driver under `/tmp`. They are not part of
+OpenVixDiskLib.
 
 ## Next stages (same procedure)
 

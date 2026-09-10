@@ -1,8 +1,11 @@
-# openvixdisklib
+# OpenVixDiskLib
 
-A Python replacement for VMware VDDK's `vixDiskLib` NBD path. It reads
-and writes VMDK contents over vSphere NFC without the proprietary VDDK
-SDK.
+OpenVixDiskLib is an open-source Python replacement for VMware VDDK's
+`VixDiskLib` NBD path. It reads and writes VMDK contents over vSphere
+NFC without the proprietary VDDK SDK.
+
+The Python package is `openvixdisklib` (lowercase, following usual
+Python naming).
 
 VIM login and inventory use [pyVmomi](https://github.com/vmware/pyvmomi).
 The NFC ticket, ESXi authd handshake, and disk I/O were reverse-engineered
@@ -68,13 +71,13 @@ VDDK-shaped handle.
 | `openvixdisklib/nfc_open.py`       | Classic NFC handshake, AIO open, sector read/write     |
 | `openvixdisklib/fastlz.py`         | FastLZ NFC adapter (pip `pyfastlz`)                    |
 | `tests/integration/`               | Live pytest suite against a lab vCenter                |
-| `tests/perf/`                      | Throughput comparison of openvixdisklib vs VDDK        |
+| `tests/perf/`                      | Throughput comparison of OpenVixDiskLib vs VDDK        |
 | `tests/stress/`                    | Repeated connect/open/close leak check                 |
 | `tests/integration/vixdisklib.py`  | Native VDDK wrapper used only to cross-check           |
 | `docs/`                            | Protocol notes and reverse-engineering steps           |
 
 VDDK shared libraries, if present for cross-check, belong in `.vddk/`
-(gitignored). They are not required to use `openvixdisklib`.
+(gitignored). They are not required to use OpenVixDiskLib.
 
 ## Tests
 
@@ -107,7 +110,7 @@ Some tests are marked as ``slow`` and skipped unless you pass ``--runslow``:
 tox -e integration -- --runslow
 ```
 
-Compare write/read throughput of openvixdisklib and native VDDK
+Compare write/read throughput of OpenVixDiskLib and native VDDK
 (`64KiB`, 129-sector, and `32MiB` transfers; `nbdssl` and `nbd`;
 plain and FastLZ):
 
