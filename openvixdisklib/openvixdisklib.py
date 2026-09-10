@@ -62,7 +62,7 @@ def _nfc_compression(flags: int) -> int:
     raise NotImplementedError(f"NBD compression open flag 0x{alg:x} is not supported")
 
 
-VIX_SUPPORTED_COMPATIBILITY_MODES = ["6.0", "6.5", "6.7", "7.0", "8.0"]
+VIX_SUPPORTED_COMPATIBILITY_MODES = ["8.0"]
 
 
 def get_buffer(size: int):
@@ -142,35 +142,27 @@ class VixDiskLibHandle:
         Args:
             config_path: Ignored. VDDK used this for logging plugins.
             vixdisklib_compatibility_version: Optional ``major.minor`` string
-                such as ``8.0``. Validated for form only.
+                such as ``8.0``. Must be in
+                ``VIX_SUPPORTED_COMPATIBILITY_MODES``.
         """
         del config_path
         target_versions = VIX_SUPPORTED_COMPATIBILITY_MODES
         if vixdisklib_compatibility_version:
+            if (
+                vixdisklib_compatibility_version
+                not in VIX_SUPPORTED_COMPATIBILITY_MODES
+            ):
+                raise ValueError(
+                    "Unsupported vixDiskLib compatibility version '%s'. "
+                    "Supported versions: %s"
+                    % (
+                        vixdisklib_compatibility_version,
+                        VIX_SUPPORTED_COMPATIBILITY_MODES,
+                    )
+                )
             target_versions = [vixdisklib_compatibility_version]
         LOG.debug("vixDiskLib versions targeted: %s", target_versions)
-
-        version_used = None
-        for version in reversed(target_versions):
-            try:
-                major_ver, minor_ver = version.split(".")
-                int(major_ver)
-                int(minor_ver)
-            except ValueError as ex:
-                raise ValueError(
-                    "Unsupported vixDiskLib version format '%s'. vixDiskLib "
-                    "compatibility mode must be of the form "
-                    "'$major.$minor'" % version
-                ) from ex
-            version_used = version
-            break
-
-        if not version_used:
-            raise RuntimeError(
-                "Could not initialize vixDiskLib with any of the following "
-                "versions: %s" % target_versions
-            )
-
+        version_used = target_versions[-1]
         LOG.info(
             "Successfully initialized vixDiskLib with target version '%s'", version_used
         )
