@@ -2,7 +2,7 @@
 
 ## Overview
 
-- This is a test project meant to bypass/replace VDDK, which is no longer
+- This is a project meant to bypass/replace VDDK, which is no longer
   publicly available.
 - The end goal is to have a Python library that can be used as a VDDK replacement
   to retrieve VMware disk contents.

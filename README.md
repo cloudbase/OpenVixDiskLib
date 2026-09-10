@@ -4,6 +4,10 @@ OpenVixDiskLib is an open-source Python replacement for VMware VDDK's
 `VixDiskLib` NBD path. It reads and writes VMDK contents over vSphere
 NFC without the proprietary VDDK SDK.
 
+AI tools (Cursor + Grok 4.6) have been heavily used to reverse engineer the
+NBD and NFC protocols, obtaining a working VDDK replacement in a few hours and
+comprehensive testing in a matter of days.
+
 The Python package is `openvixdisklib` (lowercase, following usual
 Python naming).
 
@@ -18,7 +22,7 @@ Implemented against vCenter 8 / ESXi 8. Default transport is `nbdssl`
 
 - `VixDiskLib_ConnectEx` (UID credentials)
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
-- `VixDiskLib_Read`
+- `VixDiskLib_Read` (optional ``skip_decompression`` packs FastLZ extras)
 - `VixDiskLib_Write`
 
 Not implemented: compression open flags other than FastLZ, CBT /
@@ -112,7 +116,8 @@ tox -e integration -- --runslow
 
 Compare write/read throughput of OpenVixDiskLib and native VDDK
 (`64KiB`, 129-sector, and `32MiB` transfers; `nbdssl` and `nbd`;
-plain and FastLZ):
+plain, FastLZ, and OpenVixDiskLib FastLZ ``skip_decompression``;
+AIO sessions 64 KiB×1, 1 MiB×1, 2 MiB×1, and 2 MiB×4).
 
 ```bash
 tox -e perf

@@ -10,6 +10,9 @@ import pytest
 from openvixdisklib import nfc_open
 from tests.integration.base import SECTOR_SIZE, LabEnv, pattern_bytes
 
+_1MIB = 1024 * 1024
+_2MIB = 2 * 1024 * 1024
+_16MIB = 16 * 1024 * 1024
 _32MIB = 32 * 1024 * 1024
 
 
@@ -70,14 +73,60 @@ class TestNfcReadWrite:
         [nfc_open.NFC_COMPRESSION_NONE, nfc_open.NFC_COMPRESSION_FASTLZ],
         ids=["plain", "fastlz"],
     )
-    def test_write_and_read_32mb(self, lab: LabEnv, compression: int) -> None:
-        """Write 32 MiB (512 AIO chunks) and read it back in one request."""
+    @pytest.mark.parametrize(
+        "aio_buffer_count, aio_buffer_size",
+        [
+            (1, nfc_open.NFC_AIO_BUFFER_SIZE),
+            (1, _1MIB),
+            (1, _2MIB),
+            (4, _2MIB),
+            pytest.param(
+                1,
+                _16MIB,
+                marks=pytest.mark.xfail(
+                    raises=nfc_open.NfcProtocolError,
+                    reason="ESXi 8 rejects OPEN_SESSION bufSize 16 MiB",
+                    strict=True,
+                ),
+            ),
+            pytest.param(
+                1,
+                _32MIB,
+                marks=pytest.mark.xfail(
+                    raises=nfc_open.NfcProtocolError,
+                    reason="ESXi 8 rejects OPEN_SESSION bufSize 32 MiB",
+                    strict=True,
+                ),
+            ),
+        ],
+        ids=[
+            "count1-64kib",
+            "count1-1mib",
+            "count1-2mib",
+            "count4-2mib",
+            "count1-16mib",
+            "count1-32mib",
+        ],
+    )
+    def test_write_and_read_32mb(
+        self,
+        lab: LabEnv,
+        compression: int,
+        aio_buffer_count: int,
+        aio_buffer_size: int,
+    ) -> None:
+        """Write 32 MiB and read it back for several OPEN_SESSION sizes."""
         n_sectors = _32MIB // SECTOR_SIZE
         to_write = os.urandom(_32MIB)
         with (
             lab.authenticate(read_only=False) as session,
             nfc_open.open_disk(
-                session, lab.disk_path, read_only=False, compression=compression
+                session,
+                lab.disk_path,
+                read_only=False,
+                compression=compression,
+                aio_buffer_size=aio_buffer_size,
+                aio_buffer_count=aio_buffer_count,
             ) as disk,
         ):
             disk.write(0, n_sectors, to_write)

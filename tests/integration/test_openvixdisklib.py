@@ -3,11 +3,15 @@
 
 """Exercise the VDDK-compatible openvixdisklib handle against the lab."""
 
+from typing import Any
+
 import pytest
 from pyVim.connect import Disconnect
 from pyVmomi import vim
 
+from openvixdisklib import fastlz, nfc_open
 from openvixdisklib import openvixdisklib as vixdisklib
+from openvixdisklib.openvixdisklib import ReadResult
 from tests.integration.base import (
     SECTOR_AT_1GB,
     SECTOR_SIZE,
@@ -26,6 +30,29 @@ def _virtual_disk_backing(
         if isinstance(device, vim.vm.device.VirtualDisk):
             return device.backing
     raise AssertionError(f"{vm._moId} has no virtual disk")
+
+
+_2MIB = 2 * 1024 * 1024
+
+
+def _rebuild_skip(buf: Any, result: ReadResult) -> bytes:
+    """Decompress packed skip-decompression extras into uncompressed bytes."""
+    view = buf.raw if hasattr(buf, "raw") else buf
+    out = bytearray(result.uncompressed_length)
+    packed = 0
+    for frag in result.fragments:
+        extra = bytes(view[frag.offset : frag.offset + frag.length])
+        packed += frag.length
+        if frag.compression_type == nfc_open.NFC_COMPRESSION_FASTLZ:
+            chunk = fastlz.decompress(extra, frag.uncompressed_length)
+        elif frag.compression_type == nfc_open.NFC_COMPRESSION_NONE:
+            chunk = extra
+        else:
+            raise AssertionError(f"unexpected compression_type {frag.compression_type}")
+        assert len(chunk) == frag.uncompressed_length
+        out[frag.dest : frag.dest + frag.uncompressed_length] = chunk
+    assert packed == result.compressed_length
+    return bytes(out)
 
 
 class TestOpenvixdisklib:
@@ -134,3 +161,62 @@ class TestOpenvixdisklib:
                     _wait_for_task(vm.RemoveAllSnapshots_Task())
             finally:
                 Disconnect(si)
+
+    @pytest.mark.parametrize(
+        "aio_buffer_size, n_sectors, n_fragments",
+        [
+            (nfc_open.NFC_AIO_BUFFER_SIZE, 128, 1),
+            (nfc_open.NFC_AIO_BUFFER_SIZE, 129, 2),
+            (_2MIB, 129, 1),
+        ],
+        ids=["64kib-128s", "64kib-129s", "2mib-129s"],
+    )
+    def test_skip_decompression_fastlz(
+        self,
+        lab: LabEnv,
+        aio_buffer_size: int,
+        n_sectors: int,
+        n_fragments: int,
+    ) -> None:
+        """Pack FastLZ extras and rebuild the same bytes as a normal read."""
+        length = n_sectors * SECTOR_SIZE
+        expected = pattern_bytes(length, b"OVDL-SKIP-")
+        handle = vixdisklib.VixDiskLibHandle(
+            vixdisklib_compatibility_version="8.0", config_path=None
+        )
+        write_buf = vixdisklib.get_buffer(length)
+        plain_buf = vixdisklib.get_buffer(length)
+        skip_buf = vixdisklib.get_buffer(length)
+        write_buf[:length] = expected
+        connect_kwargs = lab.vixdisklib_connect_kwargs(
+            {"allow_untrusted": lab.allow_untrusted, "transport_modes": "nbd"}
+        )
+        flags = vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ
+        with (
+            handle.connect(**connect_kwargs) as conn,
+            handle.open(
+                conn,
+                lab.disk_path,
+                flags=flags,
+                aio_buffer_size=aio_buffer_size,
+                aio_buffer_count=1,
+            ) as disk,
+        ):
+            handle.write(disk, 0, n_sectors, write_buf)
+            plain = handle.read(disk, 0, n_sectors, plain_buf)
+            skip = handle.read(disk, 0, n_sectors, skip_buf, skip_decompression=True)
+        assert isinstance(plain, ReadResult)
+        assert plain.fragments == ()
+        assert plain.uncompressed_length == length
+        assert plain.compressed_length <= length
+        assert skip.uncompressed_length == length
+        assert skip.compressed_length <= length
+        assert skip.compressed_length == plain.compressed_length
+        assert len(skip.fragments) == n_fragments
+        dests = {frag.dest for frag in skip.fragments}
+        if n_fragments == 1:
+            assert dests == {0}
+        else:
+            assert dests == {0, nfc_open.NFC_AIO_BUFFER_SIZE}
+        assert plain_buf.raw[:length] == expected
+        assert _rebuild_skip(skip_buf, skip) == expected
