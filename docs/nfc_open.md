@@ -158,8 +158,26 @@ obtain a file handle or to read sector 0.
 
 ### OPEN_SESSION / sockopts / resource pool
 
-VDDK sends 16 zero bytes (`OPEN_SESSION`; server replies with 16 zeros),
-12 zero bytes (`SET_SOCK_OPTS`; server returns send/recv buffer sizes
+`OPEN_SESSION` payload is 16 bytes, little-endian:
+
+| Offset | Type     | Meaning                                              |
+| ------ | -------- | ---------------------------------------------------- |
+| 0      | `uint32` | 0 (unused in captures)                               |
+| 4      | `uint32` | AIO buffer size in **bytes** (VDDK default 65536)    |
+| 8      | `uint32` | Buffer count (VDDK ``nfcAio.Session.BufCount``)      |
+| 12     | `uint32` | 0                                                    |
+
+VDDK config `vixDiskLib.nfcAio.Session.BufSizeIn64KB` is that byte size
+divided by 64 KiB (`1` → 65536, `32` → 2097152). The server replies
+with 16 zeros; it still **uses** the requested size for IO extras.
+A 129-sector read is two fragments at 64 KiB, and one 66048-byte
+fragment at 2 MiB. Lab ESXi 8 accepted 2 MiB (`BufCount` 1 and 4) and
+rejected 16 MiB and 32 MiB (`OPEN_SESSION` AIO error). Broadcom's 16 MiB
+figure is session memory (`size × count`), not a larger extra; the
+per-buffer max on the wire is 2 MiB. Probe:
+`docs/probing_samples/vddk_aio_bufsize_probe.py`.
+
+`SET_SOCK_OPTS` is 12 zero bytes (server returns send/recv buffer sizes
 and a `uint32` flag), then `uint32` 1 (`SET_RES_POOL`, log: “Setting
 Resource Pool(1)”).
 
@@ -205,14 +223,15 @@ classic type 4 `NFC_SESSION_COMPLETE`.
 
 ## OpenVixDiskLib
 
-| Piece                         | Module                                          |
-| ----------------------------- | ----------------------------------------------- |
-| VIM + authd                   | `openvixdisklib.nfc_auth.authenticate`          |
-| Dup fd, skip TLS for NFC      | `openvixdisklib.nfc_open.takeover_authd_socket` |
-| Second TLS for nbdssl         | `openvixdisklib.nfc_open.wrap_nfcssl_socket`    |
-| FastLZ for NBD compression    | `openvixdisklib.fastlz` (pip `pyfastlz`)        |
-| Handshake + AIO + OPEN_FILE   | `openvixdisklib.nfc_open.open_disk`             |
-| Sector read / write / close   | `openvixdisklib.nfc_open.NfcDisk`               |
+| Piece                           | Module                                                    |
+| ------------------------------- | --------------------------------------------------------- |
+| VIM + authd                     | `openvixdisklib.nfc_auth.authenticate`                    |
+| Dup fd, skip TLS for NFC        | `openvixdisklib.nfc_open.takeover_authd_socket`           |
+| Second TLS for nbdssl           | `openvixdisklib.nfc_open.wrap_nfcssl_socket`              |
+| FastLZ for NBD compression      | `openvixdisklib.fastlz` (pip `pyfastlz`)                  |
+| Handshake + AIO + OPEN_FILE     | `openvixdisklib.nfc_open.open_disk`                       |
+| AIO extra size / pool count     | `open_disk(..., aio_buffer_size=, aio_buffer_count=)`     |
+| Sector read / write / close     | `openvixdisklib.nfc_open.NfcDisk`                         |
 
 Run:
 

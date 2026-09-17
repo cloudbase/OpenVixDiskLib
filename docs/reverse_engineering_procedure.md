@@ -250,7 +250,9 @@ What that comparison showed:
 - Request size stays 44; data is extra after the payload.
 - VDDK sends **one** request even when `length > 65536`. The server
   replies with several type-7 messages that share `opId`, each with a
-  chunk length at payload offset 32 (max 65536).
+  chunk length at payload offset 32 (max = OPEN_SESSION bufSize;
+  default 65536). `vixDiskLib.nfcAio.Session.BufSizeIn64KB=32` makes
+  that 2 MiB (`docs/probing_samples/vddk_aio_bufsize_probe.py`).
 - Treating offset 36 as `NFC_DISK` (`2`) was a 1-sector coincidence;
   VDDK repeats the byte length there.
 - Zeros on the wire are real transferred zeros, not a sparse skip.

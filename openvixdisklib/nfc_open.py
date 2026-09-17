@@ -25,6 +25,7 @@ import os
 import socket
 import ssl
 import struct
+from dataclasses import dataclass
 
 from openvixdisklib import fastlz
 from openvixdisklib.nfc_auth import NfcAuthSession, _ssl_client_context
@@ -34,9 +35,12 @@ NFC_AIO_MAGIC = 0xA100DA7A
 NFC_AIO_HDR_SIZE = 16
 NFC_SECTOR_SIZE = 512
 NFC_PROTOCOL_VERSION = 11
-# Max data bytes in one AIO IO request/reply fragment
-# (NfcAioInitSession buffer).
+# Max data bytes in one AIO IO request/reply fragment. Sent as
+# OPEN_SESSION ``bufSize`` (VDDK ``vixDiskLib.nfcAio.Session.BufSizeIn64KB``
+# times 64 KiB). ESXi read extras use this size; 2 MiB (32) works on
+# ESXi 8, 16 MiB and 32 MiB do not.
 NFC_AIO_BUFFER_SIZE = 65536
+NFC_AIO_BUFFER_COUNT = 1
 
 # Classic NFC message types observed on the wire (uint32 at offset 0).
 NFC_MSG_SESSION_COMPLETE = 4
@@ -76,6 +80,46 @@ NFC_AIO_IO_READ = 1
 # fall back to type 0 with raw extra data.
 NFC_COMPRESSION_NONE = 0
 NFC_COMPRESSION_FASTLZ = 2
+
+
+@dataclass(frozen=True, slots=True)
+class ReadFragment:
+    """One NFC AIO extra in a packed skip-decompression ``buf``.
+
+    Views into ``buf`` (``buf[offset:offset + length]``) are valid
+    until the next ``read`` into the same buffer.
+
+    ``dest`` is NFC payload offset 28: the byte offset of this fragment
+    **inside this uncompressed read**, starting at 0. It is not a disk
+    LBA and not a byte offset from the start of the VMDK. The disk byte
+    address is ``start_sector * sector_size + dest``.
+
+    ``offset`` is where this extra sits in packed ``buf`` (densely from
+    0 in receive order). ``length`` is the extra on the wire.
+    ``uncompressed_length`` is NFC payload offset 32.
+    """
+
+    dest: int
+    uncompressed_length: int
+    compression_type: int
+    offset: int
+    length: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReadResult:
+    """Outcome of ``NfcDisk.readinto`` / ``VixDiskLibHandle.read``.
+
+    ``compressed_length`` is bytes of extra on the wire. With
+    ``skip_decompression=True``, extras are packed in ``buf`` from
+    offset 0 and ``fragments`` describes them. The decompressing path
+    sets ``fragments`` to empty so callers can still use the lengths
+    for metrics.
+    """
+
+    uncompressed_length: int
+    compressed_length: int
+    fragments: tuple[ReadFragment, ...]
 
 
 class NfcProtocolError(ConnectionError):
@@ -162,6 +206,20 @@ def _writable_bytes(buf: bytearray | memoryview, length: int) -> memoryview:
     return raw[:length]
 
 
+def _aio_extra_len(ctype: int, body: bytes, chunk_len: int) -> int:
+    """Return this fragment's extra size on the wire."""
+    if ctype == NFC_COMPRESSION_FASTLZ:
+        extra_len = struct.unpack_from("<I", body, 36)[0]
+        if extra_len < 1:
+            raise NfcProtocolError(
+                f"FastLZ extra length {extra_len} is invalid, chunk {chunk_len}"
+            )
+        return extra_len
+    if ctype == NFC_COMPRESSION_NONE:
+        return chunk_len
+    raise NfcProtocolError(f"unsupported NFC IO compression type {ctype}")
+
+
 def _send_nfc_msg(sock: socket.socket, msg_type: int, body: bytes = b"") -> None:
     if len(body) > NFC_MSG_SIZE - 4:
         raise ValueError("NFC classic message body too large")
@@ -200,6 +258,8 @@ class NfcDisk:
         handle: int,
         sector_size: int,
         compression: int = NFC_COMPRESSION_NONE,
+        aio_buffer_size: int = NFC_AIO_BUFFER_SIZE,
+        aio_buffer_count: int = NFC_AIO_BUFFER_COUNT,
     ) -> None:
         """Wrap an AIO session that already has ``path`` open.
 
@@ -210,6 +270,11 @@ class NfcDisk:
             sector_size: Sector size from the OPEN_FILE reply.
             compression: NFC IO compression type (``NFC_COMPRESSION_NONE``
                 or ``NFC_COMPRESSION_FASTLZ``).
+            aio_buffer_size: OPEN_SESSION extra size in bytes (default
+                ``NFC_AIO_BUFFER_SIZE``, 64 KiB). ESXi read extras are
+                at most this large.
+            aio_buffer_count: OPEN_SESSION buffer pool count (default
+                ``NFC_AIO_BUFFER_COUNT``).
         """
         self._sock = sock
         self._op_id = 0
@@ -217,6 +282,8 @@ class NfcDisk:
         self.handle = handle
         self.sector_size = sector_size
         self.compression = compression
+        self.aio_buffer_size = aio_buffer_size
+        self.aio_buffer_count = aio_buffer_count
         self._closed = False
 
     def _next_op_id(self) -> int:
@@ -264,7 +331,7 @@ class NfcDisk:
         """Read ``num_sectors`` starting at ``start_sector``.
 
         Matches ``VixDiskLib_Read``: one ``NFC_AIO_MSG_IO`` request in
-        byte units. If the length exceeds the AIO buffer (64 KiB) the
+        byte units. If the length exceeds the session AIO buffer the
         server replies with several same-``opId`` fragments, which are
         placed by the fragment byte offset in the reply (they may arrive
         out of order). FASTLZ open requests compression in the opcode;
@@ -285,22 +352,30 @@ class NfcDisk:
         start_sector: int,
         num_sectors: int,
         buf: bytearray | memoryview,
-    ) -> int:
+        skip_decompression: bool = False,
+    ) -> ReadResult:
         """Read ``num_sectors`` into ``buf`` starting at ``start_sector``.
 
         Uncompressed fragments are received directly into ``buf``. FastLZ
         still decompresses into a temporary buffer, then copies the
-        result. ``buf`` must be writable and at least
-        ``num_sectors * sector_size`` bytes (a ``get_buffer`` ctypes
-        array is wrapped with ``memoryview`` by the VDDK-shaped handle).
+        result, unless ``skip_decompression`` is set. ``buf`` must be
+        writable and at least ``num_sectors * sector_size`` bytes (a
+        ``get_buffer`` ctypes array is wrapped with ``memoryview`` by
+        the VDDK-shaped handle).
 
         Args:
             start_sector: Sector offset from the start of the disk.
             num_sectors: Number of sectors to read.
             buf: Destination buffer.
+            skip_decompression: When True, pack NFC extras densely from
+                offset 0 without FastLZ decompress. Fragment metadata
+                is in the returned ``ReadResult``. Completion still
+                uses uncompressed chunk lengths.
 
         Returns:
-            The number of bytes written to ``buf``.
+            Lengths of the uncompressed request and of extras on the
+            wire. ``fragments`` is populated only when skipping
+            decompression.
         """
         if num_sectors < 1:
             raise ValueError("num_sectors must be at least 1")
@@ -314,6 +389,9 @@ class NfcDisk:
         op_id = self._next_op_id()
         self._sock.sendall(_pack_aio_hdr(NFC_AIO_MSG_IO, len(payload), op_id) + payload)
         filled = 0
+        wire_bytes = 0
+        packed_offset = 0
+        fragments: list[ReadFragment] = []
         seen: set[int] = set()
         while filled < length:
             rhdr = _recvn(self._sock, NFC_AIO_HDR_SIZE)
@@ -340,10 +418,26 @@ class NfcDisk:
                 )
             seen.add(dest)
             ctype = opcode >> 32
-            chunk_view = data[dest : dest + chunk_len]
-            if ctype == NFC_COMPRESSION_FASTLZ:
-                comp_len = struct.unpack_from("<I", body, 36)[0]
-                extra = _recvn(self._sock, comp_len)
+            extra_len = _aio_extra_len(ctype, body, chunk_len)
+            if skip_decompression:
+                end = packed_offset + extra_len
+                if end > length:
+                    raise NfcProtocolError(
+                        f"packed extras {end} bytes exceed request {length}"
+                    )
+                _recvn_into(self._sock, data[packed_offset:end])
+                fragments.append(
+                    ReadFragment(
+                        dest=dest,
+                        uncompressed_length=chunk_len,
+                        compression_type=ctype,
+                        offset=packed_offset,
+                        length=extra_len,
+                    )
+                )
+                packed_offset = end
+            elif ctype == NFC_COMPRESSION_FASTLZ:
+                extra = _recvn(self._sock, extra_len)
                 try:
                     chunk = fastlz.decompress(extra, chunk_len)
                 except ValueError as exc:
@@ -354,19 +448,24 @@ class NfcDisk:
                     raise NfcProtocolError(
                         f"FastLZ read got {len(chunk)} bytes, expected {chunk_len}"
                     )
-                chunk_view[:] = chunk
+                data[dest : dest + chunk_len] = chunk
             elif ctype == NFC_COMPRESSION_NONE:
-                _recvn_into(self._sock, chunk_view)
+                _recvn_into(self._sock, data[dest : dest + chunk_len])
             else:
                 raise NfcProtocolError(f"unsupported NFC IO compression type {ctype}")
+            wire_bytes += extra_len
             filled += chunk_len
-        return length
+        return ReadResult(
+            uncompressed_length=length,
+            compressed_length=wire_bytes,
+            fragments=tuple(fragments) if skip_decompression else (),
+        )
 
     def write(self, start_sector: int, num_sectors: int, data: bytes) -> None:
         """Write ``num_sectors`` starting at ``start_sector``.
 
         Matches ``VixDiskLib_Write``: one ``NFC_AIO_MSG_IO`` ``opId``
-        for the whole call. Chunks larger than the AIO buffer (64 KiB)
+        for the whole call. Chunks larger than the session AIO buffer
         are extra fragments with that same ``opId``; the server replies
         once. FASTLZ open compresses each fragment when that shrinks it.
 
@@ -384,7 +483,7 @@ class NfcDisk:
         op_id = self._next_op_id()
         frag_offset = 0
         while frag_offset < length:
-            chunk = data[frag_offset : frag_offset + NFC_AIO_BUFFER_SIZE]
+            chunk = data[frag_offset : frag_offset + self.aio_buffer_size]
             extra = chunk
             extra_len = len(chunk)
             ctype = NFC_COMPRESSION_NONE
@@ -484,7 +583,10 @@ def _handshake(sock: socket.socket, client_name: str, op_id: str, version: int) 
 
 
 def _aio_prepare(disk: NfcDisk) -> None:
-    disk._aio_roundtrip(NFC_AIO_MSG_OPEN_SESSION, bytes(16))
+    open_session = struct.pack(
+        "<IIII", 0, disk.aio_buffer_size, disk.aio_buffer_count, 0
+    )
+    disk._aio_roundtrip(NFC_AIO_MSG_OPEN_SESSION, open_session)
     disk._aio_roundtrip(NFC_AIO_MSG_SET_SOCK_OPTS, bytes(12))
     disk._aio_roundtrip(NFC_AIO_MSG_SET_RES_POOL, struct.pack("<I", 1))
 
@@ -509,6 +611,8 @@ def open_disk(
     version: int = NFC_PROTOCOL_VERSION,
     read_only: bool = True,
     compression: int = NFC_COMPRESSION_NONE,
+    aio_buffer_size: int = NFC_AIO_BUFFER_SIZE,
+    aio_buffer_count: int = NFC_AIO_BUFFER_COUNT,
 ) -> NfcDisk:
     """Open ``disk_path`` over the authenticated authd socket.
 
@@ -528,7 +632,13 @@ def open_disk(
         read_only: When True, open with VDDK's read-only NFC flags.
         compression: ``NFC_COMPRESSION_NONE`` or ``NFC_COMPRESSION_FASTLZ``.
             OPEN_FILE flags are unchanged; compression is per IO message.
+        aio_buffer_size: Extra size advertised in OPEN_SESSION (bytes).
+        aio_buffer_count: Buffer pool count advertised in OPEN_SESSION.
     """
+    if aio_buffer_size < 1:
+        raise ValueError("aio_buffer_size must be at least 1")
+    if aio_buffer_count < 1:
+        raise ValueError("aio_buffer_count must be at least 1")
     if compression not in (NFC_COMPRESSION_NONE, NFC_COMPRESSION_FASTLZ):
         raise NotImplementedError(
             f"NFC compression type {compression} is not supported"
@@ -546,6 +656,8 @@ def open_disk(
             handle=0,
             sector_size=NFC_SECTOR_SIZE,
             compression=compression,
+            aio_buffer_size=aio_buffer_size,
+            aio_buffer_count=aio_buffer_count,
         )
         _aio_prepare(disk)
         path_b = disk_path.encode("utf-8")

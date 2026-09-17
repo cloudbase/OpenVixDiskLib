@@ -26,6 +26,9 @@ from pyVmomi import vim
 
 from openvixdisklib import nfc_auth, nfc_open
 
+ReadResult = nfc_open.ReadResult
+ReadFragment = nfc_open.ReadFragment
+
 LOG = logging.getLogger(__name__)
 
 VIXDISKLIB_VERSION_MAJOR = 8
@@ -264,6 +267,8 @@ class VixDiskLibHandle:
         conn: _Connection,
         disk_path: str,
         flags: int = VIXDISKLIB_FLAG_OPEN_READ_ONLY,
+        aio_buffer_size: int = nfc_open.NFC_AIO_BUFFER_SIZE,
+        aio_buffer_count: int = nfc_open.NFC_AIO_BUFFER_COUNT,
     ) -> Iterator[_DiskHandle]:
         """Open ``disk_path`` over NFC. Matches ``VixDiskLib_Open``.
 
@@ -280,6 +285,13 @@ class VixDiskLibHandle:
                 the disk read-only; omit it for write.
                 ``VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`` compresses
                 NFC IO. zlib and skipz are not implemented.
+            aio_buffer_size: NFC AIO extra size in bytes, advertised in
+                OPEN_SESSION. Default 64 KiB. ESXi 8 accepts 2 MiB
+                (``2097152``) and rejects 16 MiB and 32 MiB. This is an
+                OpenVixDiskLib extension (VDDK uses
+                ``vixDiskLib.nfcAio.Session.BufSizeIn64KB``).
+            aio_buffer_count: NFC AIO buffer pool count. Default 1.
+                VDDK's default is 4.
         """
         LOG.debug("Openning VixDiskLib disk: %s", disk_path)
         compression = _nfc_compression(flags)
@@ -298,7 +310,12 @@ class VixDiskLibHandle:
         session = nfc_auth.NfcAuthSession(conn.si, ticket, authd_sock, nfc_ssl=nfc_ssl)
         try:
             disk = nfc_open.open_disk(
-                session, disk_path, read_only=read_only, compression=compression
+                session,
+                disk_path,
+                read_only=read_only,
+                compression=compression,
+                aio_buffer_size=aio_buffer_size,
+                aio_buffer_count=aio_buffer_count,
             )
         except Exception:
             authd_sock.close()
@@ -315,7 +332,8 @@ class VixDiskLibHandle:
         start_sector: int,
         num_sectors: int,
         buf: ctypes.Array | bytearray | memoryview,
-    ) -> None:
+        skip_decompression: bool = False,
+    ) -> ReadResult:
         """Read ``num_sectors`` from ``start_sector`` into ``buf``.
 
         Args:
@@ -323,9 +341,27 @@ class VixDiskLibHandle:
             start_sector: First sector to read.
             num_sectors: Number of sectors to read.
             buf: Destination buffer (``get_buffer`` or a writable bytes-like).
-                Uncompressed NFC extra is received into this buffer.
+                Uncompressed NFC extra is received into this buffer
+                unless ``skip_decompression`` is True.
+            skip_decompression: OpenVixDiskLib extension. When True,
+                pack NFC extras densely from offset 0 without FastLZ
+                decompress. ``ReadResult.fragments`` lists each extra
+                (``ReadFragment``). ``ReadFragment.dest`` is the byte
+                offset inside this uncompressed read, not a disk
+                offset. Completion still uses uncompressed
+                lengths. With no FASTLZ open flag this only records
+                raw extras (``compressed_length == uncompressed_length``).
+
+        Returns:
+            Uncompressed and wire lengths. ``fragments`` is empty unless
+            ``skip_decompression`` is True.
         """
-        disk_handle.disk.readinto(start_sector, num_sectors, memoryview(buf))
+        return disk_handle.disk.readinto(
+            start_sector,
+            num_sectors,
+            memoryview(buf),
+            skip_decompression=skip_decompression,
+        )
 
     def write(
         self,

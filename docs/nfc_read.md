@@ -26,11 +26,13 @@ length = numSectors * sectorSize
 | `VixDiskLib_Read(h, 0, 128, buf)` | IO length 65536 (AIO buffer size), one fragment  |
 | `VixDiskLib_Read(h, 0, 129, buf)` | One request of 66048; **two** reply fragments    |
 
-VDDK does **not** split a `Read` larger than 64 KiB into multiple
-requests. The client sends one AIO message; the server answers with
-one or more same-`opId` replies, each carrying at most
-`NFC_AIO_BUFFER_SIZE` (65536) data bytes. `NfcAioInitSession` logged
-that buffer size and count 4 during open.
+VDDK does **not** split a `Read` larger than the AIO buffer into
+multiple requests. The client sends one AIO message; the server
+answers with one or more same-`opId` replies, each carrying at most
+the OPEN_SESSION buffer size (VDDK default 65536).
+`vixDiskLib.nfcAio.Session.BufSizeIn64KB=32` advertises 2 MiB; a
+129-sector read then returns **one** 66048-byte extra, and a 2 MiB +
+512 read returns 2097152 + 512. See `docs/nfc_open.md` (OPEN_SESSION).
 
 Sparse regions are still transferred as zeros. A read of 8 sectors at
 LBA 8 on this disk was 4096 zero bytes on the wire, not a skip.
@@ -81,22 +83,23 @@ payload + `chunkLength` data bytes.
 
 Reply payload (handle is zeroed; lengths describe this fragment):
 
-| Offset | Type     | Meaning                                         |
-| ------ | -------- | ----------------------------------------------- |
-| 0      | `uint64` | `0`                                             |
-| 8      | `uint64` | `1` (read)                                      |
-| 16     | `uint64` | Byte offset of the **request**                  |
-| 24     | `uint32` | Total request length                            |
-| 28     | `uint32` | Byte offset of this fragment (`0`, `65536`, …)  |
-| 32     | `uint32` | This fragment’s byte length                     |
-| 36     | `uint32` | Same as offset 32                               |
-| 40     | `uint32` | `0`                                             |
+| Offset | Type     | Meaning                                                              |
+| ------ | -------- | -------------------------------------------------------------------- |
+| 0      | `uint64` | `0`                                                                  |
+| 8      | `uint64` | `1` (read)                                                           |
+| 16     | `uint64` | Byte offset of the **request** on disk                               |
+| 24     | `uint32` | Total request length                                                 |
+| 28     | `uint32` | Fragment byte offset **in this request** (`0`, `65536`, …), not disk |
+| 32     | `uint32` | This fragment’s uncompressed byte length                             |
+| 36     | `uint32` | Same as offset 32, or compressed extra size when type is FastLZ      |
+| 40     | `uint32` | `0`                                                                  |
 
 When there is a single fragment, offsets 24–31 look like a `uint64`
 length (the fragment offset is 0). The 129-sector capture shows why
 they are two `uint32`s: fragment 0 has `(66048, 0)` then chunk 65536;
 fragment 1 has `(66048, 65536)` then chunk 512. `0x00010000` at offset
-28 is the byte offset, not a 0-based index.
+28 is the byte offset, not a 0-based index. Disk byte address of a
+fragment is request offset (payload 16) plus payload 28.
 
 Read loop: receive fragments with that `opId` until the concatenated
 data length equals the request. Use the `uint32` at payload offset 32
@@ -112,6 +115,9 @@ C: type=7 opId=18 size=44  offset=0 length=66048
 S: type=7 opId=18 size=44  dest=0     chunk=65536  + 65536 data
 S: type=7 opId=18 size=44  dest=65536 chunk=512    + 512 data
 ```
+
+`dest` in that dump is payload offset 28 (`ReadFragment.dest`): 0 and
+65536 are positions in this 66048-byte read, not sector numbers.
 
 ## Lab check
 
@@ -134,6 +140,54 @@ Writes use the same 44-byte IO payload with opcode `2`; see
 The integration test writes and then reads the captured VDDK ranges
 (including a 129-sector transfer that must assemble two read
 fragments).
+
+## Skip decompression (OpenVixDiskLib extension)
+
+`VixDiskLib_Read` always fills `buf` with uncompressed sector bytes.
+OpenVixDiskLib can skip FastLZ decode so a backup application can
+forward the compressed data as-is, avoiding unnecessary re-compression.
+
+`NfcDisk.readinto(..., skip_decompression=True)` and
+`VixDiskLibHandle.read(..., skip_decompression=True)` still send one
+IO request and wait until uncompressed `filled == length`. They do
+**not** decompress. Extras are packed densely from offset 0 of `buf`.
+`ReadResult.fragments` describes each extra. Type `2` extras are
+FastLZ; type `0` fallbacks are raw. Concatenating extras is not a
+valid FastLZ stream; the caller must use the table to split them.
+
+| Field                  | Meaning                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `dest`                 | Byte offset **in this uncompressed read** (NFC payload 28). Not a disk LBA or VMDK file offset.  |
+| `uncompressed_length`  | Uncompressed fragment size (NFC payload 32).                                                     |
+| `compression_type`     | `NFC_COMPRESSION_NONE` (0) or `NFC_COMPRESSION_FASTLZ` (2).                                      |
+| `offset`               | Start of this extra in packed `buf` (receive order, densely from 0).                             |
+| `length`               | Extra size on the wire.                                                                          |
+
+Disk byte address of a fragment is `start_sector * 512 + dest`. A
+129-sector `read` from sector 0 or from sector 1000 still reports
+`dest=0` and `dest=65536` when extras are 64 KiB.
+
+`buf` is sized for the uncompressed request, so it is always large
+enough. Default `read` still decompresses; `fragments` is empty and
+`compressed_length` is still the extra bytes on the wire.
+`skip_decompression` with a plain (no FASTLZ) open only records raw
+extras (`compressed_length == uncompressed_length`).
+
+This is not `VixDiskLib_Read`. Do not add an open flag for it;
+compression on the wire is already the FASTLZ open flag.
+
+A 32 MiB read at 64 KiB extras is 512 fragments in **one** result. A
+2 MiB OPEN_SESSION extra (`aio_buffer_size=2097152`) is 16 fragments
+for the same read. One dest PUT per extra is not viable.
+
+```
+uncompressed request (offsets in this read, not on disk)
+|---------------- 64KiB --|-- 64KiB --|-- ... --|
+     dest=0                    dest=65536
+     extra (FastLZ or raw)     extra (FastLZ or raw)
+
+buf when skip_decompression=True: extras packed densely from offset 0
+```
 
 ## What is still VDDK-only
 

@@ -85,8 +85,9 @@ A 1-sector VDDK write was 572 bytes on the wire: 16 + 44 + 512.
 
 ## Fragments and the single reply
 
-`NfcAioInitSession` advertises a 64 KiB buffer. Extra per type-7
-message is at most that size. VDDK does **not** issue a new `opId` per
+`OPEN_SESSION` advertises the AIO buffer size (VDDK default 64 KiB;
+`BufSizeIn64KB` can raise it). Extra per type-7 message is at most
+that size. VDDK does **not** issue a new `opId` per
 chunk, and it does **not** coalesce separate `VixDiskLib_Write` calls
 (eight 8 KiB writes stayed eight IOs). One public write becomes N
 client type-7 messages with the **same** `opId`, then **one** 44-byte
@@ -105,9 +106,9 @@ for one reply per chunk; raising the window did not match VDDK
 throughput because VDDK pays one RTT per `Write`, not per fragment.
 
 `NfcAioFlushCoalescedWrites` is server-side (`nfcAioServer.c`), not a
-client merge of API writes. OPEN_SESSION is 16 zero bytes both ways, so
-the logged AIO buffer count of 4 is a VDDK client default
-(`vixDiskLib.nfcAio.Session.BufCount`), not a server cap.
+client merge of API writes. Buffer count is
+`vixDiskLib.nfcAio.Session.BufCount` (OPEN_SESSION offset 8); size is
+`BufSizeIn64KB` (offset 4, in bytes). `docs/nfc_open.md`.
 
 ## OpenVixDiskLib
 
