@@ -14,6 +14,8 @@ import tempfile
 import time
 from typing import Any
 
+import pytest
+
 from openvixdisklib import nfc_open
 from openvixdisklib import openvixdisklib as open_vix
 from tests.integration import vixdisklib
@@ -22,6 +24,12 @@ from tests.integration.base import (
     LabEnv,
     ensure_vddk_library_path,
     pattern_bytes,
+)
+from tests.integration.hotadd_proxy import (
+    REMOTE_DIR,
+    REMOTE_PYTHON,
+    prepare_hotadd_proxy,
+    ssh_proxy,
 )
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -262,6 +270,102 @@ def _mib_per_s(nbytes: int, seconds: float) -> float:
     return (nbytes / (1024 * 1024)) / seconds
 
 
+_HOTADD_REMOTE = os.path.join(os.path.dirname(__file__), "hotadd_remote.py")
+_HOTADD_SSH_TIMEOUT_S = 600
+_PerfRow = tuple[str, str, str, str, str, str, float, float, float, float]
+
+
+def _time_hotadd_remote(
+    lab: LabEnv, proxy: dict[str, str], label: str, nbytes: int
+) -> tuple[float, float]:
+    """Time OpenVixDiskLib HotAdd write/read on the Linux proxy guest."""
+    payload = json.dumps(
+        {
+            "server_name": lab.host,
+            "thumbprint": lab.thumbprint,
+            "username": lab.username,
+            "password": lab.password,
+            "port": lab.port,
+            "allow_untrusted": lab.allow_untrusted,
+            "vmx_spec": lab.vmx_spec,
+            "disk_path": lab.disk_path,
+            "label": label,
+            "nbytes": nbytes,
+        }
+    ).encode()
+    result = ssh_proxy(
+        proxy,
+        f"cd {REMOTE_DIR} && PYTHONPATH={REMOTE_DIR} {REMOTE_PYTHON} "
+        "hotadd_perf_remote.py",
+        stdin=payload,
+        timeout=_HOTADD_SSH_TIMEOUT_S,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "hotadd perf remote failed "
+            f"rc={result.returncode} "
+            f"stdout={result.stdout.decode(errors='replace')!r} "
+            f"stderr={result.stderr.decode(errors='replace')!r}"
+        )
+    report = json.loads(result.stdout.decode())
+    if not report.get("ok"):
+        raise RuntimeError(f"hotadd perf remote error: {report}")
+    return float(report["write_s"]), float(report["read_s"])
+
+
+def _hotadd_rows(lab: LabEnv) -> list[_PerfRow]:
+    """Time plain HotAdd I/O for each transfer size on the proxy guest."""
+    proxy = prepare_hotadd_proxy({"hotadd_perf_remote.py": _HOTADD_REMOTE})
+    print(f"hotadd timings run on {proxy['user']}@{proxy['host']}")
+    rows: list[_PerfRow] = []
+    for label, nbytes in _SIZES:
+        write_s, read_s = _time_hotadd_remote(lab, proxy, label, nbytes)
+        rows.append(
+            (
+                label,
+                "-",
+                "-",
+                "hotadd",
+                "plain",
+                "openvixdisklib",
+                write_s,
+                read_s,
+                _mib_per_s(nbytes, write_s),
+                _mib_per_s(nbytes, read_s),
+            )
+        )
+    return rows
+
+
+def _print_perf_table(rows: list[_PerfRow]) -> None:
+    """Print throughput rows to stdout (``tox -e perf`` uses ``-s``)."""
+    print()
+    print(
+        f"{'size':<14} {'aio_size':<8} {'aio_count':>9} "
+        f"{'transport':<10} {'flags':<12} {'library':<16} "
+        f"{'write_s':>10} {'read_s':>10} "
+        f"{'write_MiB/s':>12} {'read_MiB/s':>12}"
+    )
+    for (
+        label,
+        aio_label,
+        aio_count,
+        transport_mode,
+        mode_name,
+        name,
+        write_s,
+        read_s,
+        write_r,
+        read_r,
+    ) in rows:
+        print(
+            f"{label:<14} {aio_label:<8} {aio_count:>9} "
+            f"{transport_mode:<10} {mode_name:<12} {name:<16} "
+            f"{write_s:10.3f} {read_s:10.3f} "
+            f"{write_r:12.1f} {read_r:12.1f}"
+        )
+
+
 class TestCompare:
     def test_write_read_throughput(self, lab: LabEnv, vddk: None) -> None:
         """Time matching write/read sizes on VDDK and openvixdisklib.
@@ -287,7 +391,7 @@ class TestCompare:
                 True,
             ),
         )
-        rows: list[tuple[str, str, int, str, str, str, float, float, float, float]] = []
+        rows: list[_PerfRow] = []
         for label, nbytes in _SIZES:
             for aio_buffer_count, aio_buffer_size in _AIO_SESSIONS:
                 aio_label = _aio_size_label(aio_buffer_size)
@@ -311,7 +415,7 @@ class TestCompare:
                                 (
                                     label,
                                     aio_label,
-                                    aio_buffer_count,
+                                    str(aio_buffer_count),
                                     transport_mode,
                                     mode_name,
                                     name,
@@ -321,31 +425,21 @@ class TestCompare:
                                     _mib_per_s(nbytes, read_s),
                                 )
                             )
-        print()
-        print(
-            f"{'size':<14} {'aio_size':<8} {'aio_count':>9} "
-            f"{'transport':<10} {'flags':<12} {'library':<16} "
-            f"{'write_s':>10} {'read_s':>10} "
-            f"{'write_MiB/s':>12} {'read_MiB/s':>12}"
-        )
-        for (
-            label,
-            aio_label,
-            aio_buffer_count,
-            transport_mode,
-            mode_name,
-            name,
-            write_s,
-            read_s,
-            write_r,
-            read_r,
-        ) in rows:
-            print(
-                f"{label:<14} {aio_label:<8} {aio_buffer_count:>9} "
-                f"{transport_mode:<10} {mode_name:<12} {name:<16} "
-                f"{write_s:10.3f} {read_s:10.3f} "
-                f"{write_r:12.1f} {read_r:12.1f}"
-            )
+        _print_perf_table(rows)
+
+    def test_hotadd_write_read_throughput(self, lab: LabEnv) -> None:
+        """Time OpenVixDiskLib HotAdd write/read on the Linux proxy guest.
+
+        Uses the same transfer sizes as ``test_write_read_throughput``.
+        FastLZ and NFC AIO do not apply. Native VDDK HotAdd is not
+        compared (it would also have to run in the guest). Skips when
+        ``hotadd_proxy`` is missing or SSH fails.
+        """
+        try:
+            rows = _hotadd_rows(lab)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        _print_perf_table(rows)
 
 
 if __name__ == "__main__":

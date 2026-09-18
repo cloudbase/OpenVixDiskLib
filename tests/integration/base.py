@@ -144,6 +144,28 @@ def _load_test_config() -> dict[str, Any]:
     }
 
 
+def load_hotadd_proxy_config() -> dict[str, str] | None:
+    """Return optional SSH settings for the Linux HotAdd proxy, if configured."""
+    if not os.path.isfile(_CONFIG_PATH):
+        return None
+    with open(_CONFIG_PATH, encoding="utf-8") as config_file:
+        data = yaml.safe_load(config_file) or {}
+    proxy = data.get("hotadd_proxy")
+    if not isinstance(proxy, dict) or not proxy.get("host"):
+        return None
+    identity = proxy.get("identity_file")
+    if identity:
+        identity_file = os.path.expanduser(str(identity))
+    else:
+        default_key = os.path.expanduser("~/.ssh/id_ed25519")
+        identity_file = default_key if os.path.isfile(default_key) else ""
+    return {
+        "host": str(proxy["host"]),
+        "user": str(proxy.get("user", "root")),
+        "identity_file": identity_file,
+    }
+
+
 def _connect_vim(
     host: str,
     username: str,
@@ -199,7 +221,9 @@ def _find_datastore(datacenter: vim.Datacenter, datastore_name: str) -> vim.Data
     return matches[0]
 
 
-def _vm_config_spec(vm_name: str, datastore_name: str) -> vim.vm.ConfigSpec:
+def _vm_config_spec(
+    vm_name: str, datastore_name: str, disk_controller: str = "pvscsi"
+) -> vim.vm.ConfigSpec:
     config = vim.vm.ConfigSpec()
     config.name = vm_name
     config.guestId = "otherGuest64"
@@ -207,10 +231,21 @@ def _vm_config_spec(vm_name: str, datastore_name: str) -> vim.vm.ConfigSpec:
     config.numCPUs = 1
     config.files = vim.vm.FileInfo(vmPathName=f"[{datastore_name}]")
 
-    controller = vim.vm.device.ParaVirtualSCSIController()
-    controller.key = 1000
-    controller.busNumber = 0
-    controller.sharedBus = vim.vm.device.VirtualSCSIController.Sharing.noSharing
+    if disk_controller == "nvme":
+        controller: vim.vm.device.VirtualController = (
+            vim.vm.device.VirtualNVMEController()
+        )
+        controller.key = 1000
+        controller.busNumber = 0
+    elif disk_controller == "pvscsi":
+        scsi = vim.vm.device.ParaVirtualSCSIController()
+        scsi.key = 1000
+        scsi.busNumber = 0
+        scsi.sharedBus = vim.vm.device.VirtualSCSIController.Sharing.noSharing
+        controller = scsi
+    else:
+        raise ValueError(f"unsupported disk_controller: {disk_controller}")
+
     controller_spec = vim.vm.device.VirtualDeviceSpec()
     controller_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
     controller_spec.device = controller
@@ -234,8 +269,12 @@ def _vm_config_spec(vm_name: str, datastore_name: str) -> vim.vm.ConfigSpec:
     return config
 
 
-def create_lab_vm() -> LabEnv:
-    """Create an empty VM with a 10 GiB thin disk for I/O tests."""
+def create_lab_vm(*, disk_controller: str = "pvscsi") -> LabEnv:
+    """Create an empty VM with a 10 GiB thin disk for I/O tests.
+
+    Args:
+        disk_controller: ``pvscsi`` (default) or ``nvme``.
+    """
     cfg = _load_test_config()
     thumbprint = nfc_auth.get_ssl_cert_thumbprint(cfg["host"], cfg["port"])
     si = _connect_vim(
@@ -260,7 +299,11 @@ def create_lab_vm() -> LabEnv:
         vm_name = _LAB_VM_PREFIX + uuid.uuid4().hex[:12]
         vm = _wait_for_task(
             datacenter.vmFolder.CreateVM_Task(
-                config=_vm_config_spec(vm_name, datastore.name), pool=pool, host=host
+                config=_vm_config_spec(
+                    vm_name, datastore.name, disk_controller=disk_controller
+                ),
+                pool=pool,
+                host=host,
             )
         )
         disks = [
