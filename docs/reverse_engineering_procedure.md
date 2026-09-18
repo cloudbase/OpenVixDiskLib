@@ -9,9 +9,11 @@ NFC work can follow the same loop instead of rediscovering it.
 
 Scope so far: `VixDiskLib_ConnectEx` + `VixDiskLib_Open` +
 `VixDiskLib_Read` + `VixDiskLib_Write` against lab vCenter 8.0.1 /
-ESXi 8, transports `nbd` and `nbdssl`. Validation method:
-`tests/integration/` (the session-scoped `lab` fixture creates a temporary
-empty VM with a 10 GiB disk and destroys it when the pytest session ends).
+ESXi 8, transports `nbd`, `nbdssl`, and Linux-guest `hotadd`.
+Validation method: `tests/integration/` (the session-scoped `lab`
+fixture creates a temporary empty VM with a 10 GiB disk and destroys it
+when the pytest session ends). HotAdd live tests also SSH into a Linux
+proxy guest; see `docs/hotadd.md`.
 
 Rule from `AGENTS.md`: reuse pyVmomi for every public VIM operation.
 Only reimplement what pyVmomi does not expose.
@@ -409,3 +411,11 @@ Not yet reversed, same loop as above:
 - `VixDiskLib_GetInfo` capacity
 - Host-switch AIO messages
 - Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
+
+## HotAdd (not NFC)
+
+HotAdd does not use the capture loop above. VDDK SCSI-attaches the
+source VMDK to the proxy VM and opens a local whole disk. OpenVixDiskLib
+reuses pyVmomi `ReconfigureVM` for attach/detach and `pread`/`pwrite` on
+the Linux SCSI device. NVMe and SATA source disks are remapped onto a
+proxy SCSI controller. Details: `docs/hotadd.md`.

@@ -10,7 +10,8 @@ Callers can switch with::
 
 ``VixDiskLibHandle.connect`` / ``open`` / ``read`` match the VDDK wrapper
 in ``tests/integration/vixdisklib.py``. VIM login uses pyVmomi; NFC ticket,
-authd, and disk I/O use ``nfc_auth`` and ``nfc_open``.
+authd, and disk I/O use ``nfc_auth`` and ``nfc_open``. Linux HotAdd uses
+``hotadd``.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from collections.abc import Iterator
 from pyVim.connect import Disconnect
 from pyVmomi import vim
 
-from openvixdisklib import nfc_auth, nfc_open
+from openvixdisklib import hotadd, nfc_auth, nfc_open
 
 ReadResult = nfc_open.ReadResult
 ReadFragment = nfc_open.ReadFragment
@@ -84,20 +85,31 @@ def _parse_vm_moref(vmx_spec: str | None) -> str:
     return vmx_spec
 
 
+def _available_transports() -> list[str]:
+    """Return transports this process can use, in advertisement order."""
+    modes = ["nbdssl", "nbd"]
+    if hotadd.is_vmware_guest():
+        modes.append("hotadd")
+    return modes
+
+
 def _select_transport(transport_modes: str | None) -> str:
-    """Return the first requested transport this replacement implements.
+    """Return the first requested transport this replacement can use.
 
     ``None`` defaults to ``nbdssl``. A colon-separated list (VDDK
-    style, for example ``file:nbdssl:nbd``) picks the first of
-    ``nbdssl`` or ``nbd``.
+    style, for example ``file:san:hotadd:nbdssl:nbd``) picks the first
+    of ``nbdssl``, ``nbd``, and ``hotadd`` that is usable here.
+    ``hotadd`` is usable only inside a VMware guest.
     """
     if transport_modes is None:
         return "nbdssl"
+    usable = set(_available_transports())
     for mode in transport_modes.split(":"):
-        if mode in ("nbdssl", "nbd"):
+        if mode in usable:
             return mode
     raise NotImplementedError(
-        f"supported transports are nbdssl and nbd, got {transport_modes!r}"
+        f"supported transports are {' and '.join(_available_transports())}, "
+        f"got {transport_modes!r}"
     )
 
 
@@ -124,9 +136,14 @@ class _Connection:
 
 
 class _DiskHandle:
-    """Opened NFC disk plus the authd TLS socket it was taken from."""
+    """Opened disk (NFC or HotAdd) plus an optional authd TLS socket."""
 
-    def __init__(self, disk: nfc_open.NfcDisk, authd_sock, transport_mode: str) -> None:
+    def __init__(
+        self,
+        disk: nfc_open.NfcDisk | hotadd.HotAddDisk,
+        transport_mode: str,
+        authd_sock=None,
+    ) -> None:
         self.disk = disk
         self.authd_sock = authd_sock
         self.transport_mode = transport_mode
@@ -178,8 +195,8 @@ class VixDiskLibHandle:
         return "libvixDiskLib.so"
 
     def get_transport_modes(self) -> list[str]:
-        """Return the transport modes this replacement implements."""
-        return ["nbdssl", "nbd"]
+        """Return the transport modes this process can use."""
+        return _available_transports()
 
     def get_transport_mode(self, disk_handle: _DiskHandle) -> str:
         """Return the transport used for ``disk_handle``."""
@@ -214,11 +231,13 @@ class VixDiskLibHandle:
             username: VIM user name.
             password: VIM password.
             vmx_spec: VM selector, ``moref=vm-…``.
-            snapshot_ref: Snapshot moref; unused on the NFC ticket.
+            snapshot_ref: Snapshot moref. Unused on the NFC ticket.
+                Required for HotAdd when the source VM is powered on.
             read_only: When False, the disk may be opened for write.
-            transport_modes: ``nbdssl``, ``nbd``, or a colon list. The
-                first supported mode is used; ``None`` defaults to
-                ``nbdssl``.
+            transport_modes: ``nbdssl``, ``nbd``, ``hotadd``, or a colon
+                list. The first usable mode is used; ``None`` defaults
+                to ``nbdssl``. ``hotadd`` is usable only in a VMware
+                guest.
             port: HTTPS port, usually 443.
             allow_untrusted: Skip management TLS verification when True.
                 When False with no ``thumbprint``, the system CA store
@@ -270,13 +289,14 @@ class VixDiskLibHandle:
         aio_buffer_size: int = nfc_open.NFC_AIO_BUFFER_SIZE,
         aio_buffer_count: int = nfc_open.NFC_AIO_BUFFER_COUNT,
     ) -> Iterator[_DiskHandle]:
-        """Open ``disk_path`` over NFC. Matches ``VixDiskLib_Open``.
+        """Open ``disk_path`` over NFC or HotAdd. Matches ``VixDiskLib_Open``.
 
-        Read-only opens request ``NfcGetVmFiles`` (VM only). The VMDK
-        path, including a snapshot parent such as ``…-000007.vmdk``, is
-        sent on NFC ``OPEN_FILE``. Writable opens use
+        Read-only NFC opens request ``NfcGetVmFiles`` (VM only). The
+        VMDK path, including a snapshot parent such as ``…-000007.vmdk``,
+        is sent on NFC ``OPEN_FILE``. Writable NFC opens use
         ``NfcRandomAccessOpenDisk`` and resolve a device key from the
-        disk's backing chain.
+        disk's backing chain. ``hotadd`` SCSI-attaches the VMDK to this
+        guest (Linux proxy) and opens the local block device.
 
         Args:
             conn: Connection from ``connect``.
@@ -284,14 +304,16 @@ class VixDiskLibHandle:
             flags: Open flags. ``VIXDISKLIB_FLAG_OPEN_READ_ONLY`` opens
                 the disk read-only; omit it for write.
                 ``VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`` compresses
-                NFC IO. zlib and skipz are not implemented.
+                NFC IO. zlib and skipz are not implemented. Compression
+                flags are not supported with ``hotadd``.
             aio_buffer_size: NFC AIO extra size in bytes, advertised in
                 OPEN_SESSION. Default 64 KiB. ESXi 8 accepts 2 MiB
                 (``2097152``) and rejects 16 MiB and 32 MiB. This is an
                 OpenVixDiskLib extension (VDDK uses
-                ``vixDiskLib.nfcAio.Session.BufSizeIn64KB``).
+                ``vixDiskLib.nfcAio.Session.BufSizeIn64KB``). Ignored
+                for HotAdd.
             aio_buffer_count: NFC AIO buffer pool count. Default 1.
-                VDDK's default is 4.
+                VDDK's default is 4. Ignored for HotAdd.
         """
         LOG.debug("Openning VixDiskLib disk: %s", disk_path)
         compression = _nfc_compression(flags)
@@ -300,6 +322,25 @@ class VixDiskLibHandle:
             raise NotImplementedError("ConnectEx was read-only; cannot open for write")
 
         vm = vim.VirtualMachine(conn.vm_moref, conn.si._stub)
+        if conn.transport_mode == "hotadd":
+            if compression != nfc_open.NFC_COMPRESSION_NONE:
+                raise NotImplementedError(
+                    "NBD compression open flags are not supported with hotadd"
+                )
+            disk = hotadd.open_disk(
+                conn.si,
+                vm,
+                disk_path,
+                snapshot_ref=conn.snapshot_ref,
+                read_only=read_only,
+            )
+            handle = _DiskHandle(disk, conn.transport_mode)
+            try:
+                yield handle
+            finally:
+                self.close(handle)
+            return
+
         nfc_ssl = conn.transport_mode == "nbdssl"
         ticket = nfc_auth.get_nfc_ticket(
             conn.si, vm, read_only=read_only, disk_path=None if read_only else disk_path
@@ -309,7 +350,7 @@ class VixDiskLibHandle:
         )
         session = nfc_auth.NfcAuthSession(conn.si, ticket, authd_sock, nfc_ssl=nfc_ssl)
         try:
-            disk = nfc_open.open_disk(
+            nfc_disk = nfc_open.open_disk(
                 session,
                 disk_path,
                 read_only=read_only,
@@ -320,7 +361,7 @@ class VixDiskLibHandle:
         except Exception:
             authd_sock.close()
             raise
-        handle = _DiskHandle(disk, authd_sock, conn.transport_mode)
+        handle = _DiskHandle(nfc_disk, conn.transport_mode, authd_sock)
         try:
             yield handle
         finally:
@@ -386,7 +427,7 @@ class VixDiskLibHandle:
         disk_handle.disk.write(start_sector, num_sectors, data)
 
     def close(self, disk_handle: _DiskHandle) -> None:
-        """Close the VMDK and the authd socket used for NFC.
+        """Close the VMDK and, for NFC, the authd socket.
 
         Args:
             disk_handle: Handle from ``open``.
@@ -395,10 +436,11 @@ class VixDiskLibHandle:
         try:
             disk_handle.disk.close()
         finally:
-            try:
-                disk_handle.authd_sock.close()
-            except OSError:
-                pass
+            if disk_handle.authd_sock is not None:
+                try:
+                    disk_handle.authd_sock.close()
+                except OSError:
+                    pass
 
     def disconnect(self, conn: _Connection) -> None:
         """Logout of the VIM session.
