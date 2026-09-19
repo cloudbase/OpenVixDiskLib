@@ -143,7 +143,7 @@ AIO types used for Open / Read / Close, correlated with the consecutive
 | 9    | `SET_SOCK_OPTS`      | 12           |                                               |
 | 22   | `SET_RES_POOL`       | 4            |                                               |
 | 4    | `OPEN_FILE`          | 60           | path string                                   |
-| 11   | `DDB_GET`            | 16           | key name (VDDK only)                          |
+| 11   | `DDB_GET`            | 16           | key name                                      |
 | 7    | `IO`                 | 44           | sector bytes (read reply / write request)     |
 | 5    | `CLOSE_FILE`         | 8            |                                               |
 | 3    | `CLOSE_SESSION`      | 4            |                                               |
@@ -155,6 +155,65 @@ VDDK Open also issues several `DDB_GET` queries (`resumeConsolidateSector`,
 `isDigest`, `iofilters`, …). The server answered “key is not found”
 (16 zero bytes) on this unencrypted disk. They are not required to
 obtain a file handle or to read sector 0.
+
+`VixDiskLib_GetInfo` (Step 14) triggers ~20 more `DDB_GET` calls right
+after `OPEN_FILE`, for these keys (captured in request-order, key name
+is the extra string after the 16-byte payload, no `ddb.` prefix on the
+wire): `resumeConsolidateSector`, `isDigest` (×3), `iofilters` (×2),
+`logicalSectorSize` (×2), `physicalSectorSize` (×2),
+`isNativeLinkedClone` (×2), `KMFilters`, `sidecars`, `adapterType`,
+`uuid`, `geometry.cylinders`, `geometry.heads`, `geometry.sectors`,
+`geometry.biosCylinders`, `geometry.biosHeads`, `geometry.biosSectors`.
+On this lab disk, `biosGeo` came back all zeros (key not found) and
+`logicalSectorSize`/`physicalSectorSize`/the non-bios `geometry.*` keys
+duplicate what OPEN_FILE already returned — only `adapterType` and
+`uuid` are genuinely new information from this burst.
+
+### `DDB_GET` request/reply layout
+
+Decoded from the same capture (request/reply pairs matched by `opId`
+across all ~28 calls seen in one `GetInfo`).
+
+Request: 16-byte fixed payload plus the key name as a raw ASCII extra
+(no NUL terminator, not counted in `size` — same convention as
+`OPEN_FILE`'s path):
+
+| Offset | Type     | Meaning                                 |
+| ------ | -------- | --------------------------------------- |
+| 0      | `uint64` | File handle (same value as `OPEN_FILE`) |
+| 8      | `uint32` | Key name length in bytes                |
+| 12     | `uint32` | 0                                       |
+| 16     | —        | Key name (ASCII, no `ddb.` prefix)      |
+
+Reply: 16 bytes plus a value extra, **not** padded (unlike
+`QueryAllocatedBlocks`'s bitmap — verified by decoding all 28 replies
+in sequence with no desync):
+
+| Offset | Type     | Meaning                                 |
+| ------ | -------- | --------------------------------------- |
+| 0-11   | —        | Zero/unused in every capture            |
+| 12     | `uint32` | Value length in bytes (`0` = not found) |
+| 16     | —        | Value (ASCII **text**, not binary)      |
+
+Values are ASCII text even for keys that sound numeric —
+`geometry.cylinders` comes back as the literal bytes `b"2088"`, not a
+binary `uint32`. This matches how a VMDK descriptor file's DDB (disk
+database) section stores keys as plain-text `ddb.<key> = "<value>"`
+lines; `adapterType` comes back as `b"lsilogic"` (a string), not
+VDDK's numeric `VIXDISKLIB_ADAPTER_SCSI_LSILOGIC` enum value — VDDK's
+own client does that string-to-enum mapping internally, which
+OpenVixDiskLib does not reproduce (`DiskInfo.adapter_type` is the raw
+DDB string).
+
+Implemented as `openvixdisklib.nfc_open.NfcDisk.ddb_get(key) -> str |
+None` and `NfcDisk.query_full_info() -> DiskInfo` (5 round trips:
+`geometry.biosCylinders`/`biosHeads`/`biosSectors`, `adapterType`,
+`uuid`), wired into `VixDiskLibHandle.get_info`, which now matches
+real VDDK's `VixDiskLib_GetInfo` exactly — capacity/physGeo free from
+`OPEN_FILE`, the rest costing the same 5 round trips VDDK itself pays.
+Validated against the live ESXi lab: matches native VDDK's `GetInfo`
+output on the same disk (`adapterType=3` ↔ `"lsilogic"`, same `uuid`
+string, same zeroed `biosGeo`).
 
 ### OPEN_SESSION / sockopts / resource pool
 
@@ -205,9 +264,19 @@ Reply payload (60 bytes), fields that matter:
 | 8      | `uint64` | File handle (opaque, per open)  |
 | 16     | `uint32` | File type (`2` = `NFC_DISK`)    |
 | 20     | `uint32` | Flags echoed (`0x1e` or `0x1a`) |
+| 28     | `uint64` | Disk capacity in **bytes**      |
 | 36     | `uint32` | Sector size (`512` on this VM)  |
+| 40     | `uint32` | Physical geometry cylinders     |
+| 44     | `uint32` | Physical geometry heads         |
+| 48     | `uint32` | Physical geometry sectors       |
 
-Later AIO messages pass that handle as a `uint64`.
+Later AIO messages pass that handle as a `uint64`. Offset 28 was found
+by capturing `VixDiskLib_GetInfo` (Step 14,
+`docs/reverse_engineering_procedure.md`): it matches
+`VixDiskLibInfo.capacity` converted to bytes, and offsets 40/44/48
+match `VixDiskLibInfo.physGeo` exactly — both already arrive with this
+reply, no separate `GetInfo` wire call exists. `biosGeo`, `adapterType`,
+and `uuid` are **not** here; VDDK gets those from `DDB_GET` (below).
 
 ### IO (read / write)
 
@@ -232,6 +301,8 @@ classic type 4 `NFC_SESSION_COMPLETE`.
 | Handshake + AIO + OPEN_FILE     | `openvixdisklib.nfc_open.open_disk`                       |
 | AIO extra size / pool count     | `open_disk(..., aio_buffer_size=, aio_buffer_count=)`     |
 | Sector read / write / close     | `openvixdisklib.nfc_open.NfcDisk`                         |
+| Full disk info (`GetInfo`)      | `openvixdisklib.openvixdisklib.VixDiskLibHandle.get_info` |
+| VMDK descriptor DDB lookup      | `openvixdisklib.nfc_open.NfcDisk.ddb_get`                 |
 
 Run:
 
@@ -246,10 +317,15 @@ I/O: `docs/nfc_read.md`, `docs/nfc_write.md`, and
 
 ## What is still VDDK-only
 
-- `DDB_GET` / geometry / zlib and skipz compression / encryption keys
-- `NFC_DELTA_DISK`, change-block tracking
+- zlib and skipz compression / encryption keys (`DDB_GET` is
+  implemented for the plain, non-encrypted keys covered above)
 - Host-switch (`NFC_AIO_SWITCH_HOST_*`)
-- Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
+
+Reading/writing a snapshot delta file directly, and running
+`query_allocated_blocks` against it, both already work with the
+existing implementation — `NFC_DELTA_DISK` turned out to be an
+optional VMFS-only VDDK client optimization, not a correctness
+requirement; see `docs/reverse_engineering_procedure.md`.
 
 Reads after open are in `docs/nfc_read.md`. Writes are in
 `docs/nfc_write.md`.
