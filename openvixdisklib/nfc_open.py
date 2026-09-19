@@ -83,6 +83,37 @@ NFC_COMPRESSION_FASTLZ = 2
 
 
 @dataclass(frozen=True, slots=True)
+class DiskGeometry:
+    """CHS geometry, matching VDDK's ``VixDiskLibGeometry``."""
+
+    cylinders: int
+    heads: int
+    sectors: int
+
+
+@dataclass(frozen=True, slots=True)
+class DiskInfo:
+    """Matches VDDK's ``VixDiskLibInfo``.
+
+    ``phys_geo`` and ``capacity_sectors`` are read directly off
+    OPEN_FILE (offsets 40/44/48 and 28 respectively) — free, no extra
+    NFC round trip. ``bios_geo``, ``adapter_type``, and ``uuid`` come
+    from ``DDB_GET`` (see ``NfcDisk.ddb_get`` / ``query_full_info``,
+    ``docs/nfc_open.md``): each is a real round trip, matching what
+    real VDDK's ``VixDiskLib_GetInfo`` does. ``bios_geo`` defaults to
+    all zeros and ``adapter_type``/``uuid`` to ``None`` when the disk
+    has no snapshots or predates that DDB key (VDDK does the same for
+    a missing key).
+    """
+
+    capacity_sectors: int
+    phys_geo: DiskGeometry
+    bios_geo: DiskGeometry = DiskGeometry(cylinders=0, heads=0, sectors=0)
+    adapter_type: str | None = None
+    uuid: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ReadFragment:
     """One NFC AIO extra in a packed skip-decompression ``buf``.
 
@@ -260,6 +291,7 @@ class NfcDisk:
         compression: int = NFC_COMPRESSION_NONE,
         aio_buffer_size: int = NFC_AIO_BUFFER_SIZE,
         aio_buffer_count: int = NFC_AIO_BUFFER_COUNT,
+        info: DiskInfo | None = None,
     ) -> None:
         """Wrap an AIO session that already has ``path`` open.
 
@@ -275,6 +307,8 @@ class NfcDisk:
                 at most this large.
             aio_buffer_count: OPEN_SESSION buffer pool count (default
                 ``NFC_AIO_BUFFER_COUNT``).
+            info: Capacity/geometry from the OPEN_FILE reply. ``None``
+                before the reply arrives.
         """
         self._sock = sock
         self._op_id = 0
@@ -284,6 +318,7 @@ class NfcDisk:
         self.compression = compression
         self.aio_buffer_size = aio_buffer_size
         self.aio_buffer_count = aio_buffer_count
+        self.info = info
         self._closed = False
 
     def _next_op_id(self) -> int:
@@ -516,6 +551,78 @@ class NfcDisk:
                 f"expected type={NFC_AIO_MSG_IO} opId={op_id}"
             )
 
+    def ddb_get(self, key: str) -> str | None:
+        """Return a VMDK descriptor DDB value, or ``None`` if unset.
+
+        Captured from VDDK: request is a 16-byte fixed payload plus the
+        key name as a raw ASCII extra (no NUL terminator, not counted
+        in ``size``, same convention as ``OPEN_FILE``'s path)::
+
+            uint64 handle
+            uint32 key_name_length
+            uint32 reserved (0)
+            <key name bytes>
+
+        Reply is 16 bytes plus a value extra, **not** padded (unlike
+        ``QueryAllocatedBlocks``'s bitmap)::
+
+            96 bits reserved/unused (always zero in this lab)
+            uint32 value_length      (0 = key not found)
+            <value bytes, ASCII text>
+
+        Values are ASCII text even for keys that sound numeric
+        (``geometry.cylinders`` comes back as the bytes ``b"2088"``,
+        not a binary int) — this matches how a VMDK descriptor file's
+        DDB (disk database) section stores keys as plain text
+        ``ddb.<key> = "<value>"`` lines. See ``docs/nfc_open.md``.
+
+        Args:
+            key: DDB key name without the ``ddb.`` prefix (for example
+                ``"adapterType"``, ``"uuid"``, ``"geometry.cylinders"``).
+        """
+        key_bytes = key.encode("ascii")
+        request = struct.pack("<QII", self.handle, len(key_bytes), 0)
+        op_id = self._aio_send(NFC_AIO_MSG_DDB_GET, request, extra=key_bytes)
+        rtype, rop, body = self._aio_recv_reply()
+        if rtype != NFC_AIO_MSG_DDB_GET or rop != op_id:
+            raise NfcProtocolError(
+                f"AIO reply type={rtype} opId={rop}, "
+                f"expected type={NFC_AIO_MSG_DDB_GET} opId={op_id}"
+            )
+        value_length = struct.unpack_from("<I", body, 12)[0]
+        if value_length == 0:
+            return None
+        return _recvn(self._sock, value_length).decode("ascii")
+
+    def query_full_info(self) -> DiskInfo:
+        """Return a ``DiskInfo`` with ``bios_geo``/``adapter_type``/``uuid`` filled in.
+
+        ``self.info`` (from OPEN_FILE) already has ``capacity_sectors``
+        and ``phys_geo`` for free; this issues 5 ``DDB_GET`` round trips
+        for the rest, matching what real VDDK's ``VixDiskLib_GetInfo``
+        does on every call. DDB values are ASCII text; geometry fields
+        are parsed as decimal integers, and any missing key falls back
+        to ``DiskInfo``'s defaults (matches VDDK: a disk with no
+        snapshots, or from before this DDB key existed, has none of
+        these set).
+        """
+        assert self.info is not None
+        bios_cylinders = self.ddb_get("geometry.biosCylinders")
+        bios_heads = self.ddb_get("geometry.biosHeads")
+        bios_sectors = self.ddb_get("geometry.biosSectors")
+        bios_geo = DiskGeometry(
+            cylinders=int(bios_cylinders) if bios_cylinders else 0,
+            heads=int(bios_heads) if bios_heads else 0,
+            sectors=int(bios_sectors) if bios_sectors else 0,
+        )
+        return DiskInfo(
+            capacity_sectors=self.info.capacity_sectors,
+            phys_geo=self.info.phys_geo,
+            bios_geo=bios_geo,
+            adapter_type=self.ddb_get("adapterType"),
+            uuid=self.ddb_get("uuid"),
+        )
+
     def close(self) -> None:
         """Close the VMDK, the AIO session, and the classic NFC session."""
         if self._closed:
@@ -591,16 +698,22 @@ def _aio_prepare(disk: NfcDisk) -> None:
     disk._aio_roundtrip(NFC_AIO_MSG_SET_RES_POOL, struct.pack("<I", 1))
 
 
-def _parse_open_reply(body: bytes) -> tuple[int, int]:
-    if len(body) < 40:
+def _parse_open_reply(body: bytes) -> tuple[int, int, DiskInfo]:
+    if len(body) < 52:
         raise NfcProtocolError(f"OPEN_FILE reply too short: {len(body)}")
     handle, file_type, _flags = struct.unpack_from("<QII", body, 8)
+    capacity_bytes = struct.unpack_from("<Q", body, 28)[0]
     sector_size = struct.unpack_from("<I", body, 36)[0]
+    cylinders, heads, sectors = struct.unpack_from("<III", body, 40)
     if file_type != NFC_DISK:
         raise NfcProtocolError(f"opened file type {file_type}, expected NFC_DISK")
     if sector_size == 0:
         sector_size = NFC_SECTOR_SIZE
-    return handle, sector_size
+    info = DiskInfo(
+        capacity_sectors=capacity_bytes // sector_size,
+        phys_geo=DiskGeometry(cylinders=cylinders, heads=heads, sectors=sectors),
+    )
+    return handle, sector_size, info
 
 
 def open_disk(
@@ -667,9 +780,10 @@ def open_disk(
         open_body = struct.pack("<IIIIII", len(path_b), 0, 0, 0, NFC_DISK, open_flags)
         open_body = open_body.ljust(60, b"\x00")
         reply = disk._aio_roundtrip(NFC_AIO_MSG_OPEN_FILE, open_body, extra=path_b)
-        handle, sector_size = _parse_open_reply(reply)
+        handle, sector_size, info = _parse_open_reply(reply)
         disk.handle = handle
         disk.sector_size = sector_size
+        disk.info = info
         return disk
     except Exception:
         sock.close()
