@@ -8,8 +8,10 @@ This file is the **sequence of steps**, including dead ends, so later
 NFC work can follow the same loop instead of rediscovering it.
 
 Scope so far: `VixDiskLib_ConnectEx` + `VixDiskLib_Open` +
-`VixDiskLib_Read` + `VixDiskLib_Write` against lab vCenter 8.0.1 /
-ESXi 8, transports `nbd` and `nbdssl`. Validation method:
+`VixDiskLib_Read` + `VixDiskLib_Write` + `VixDiskLib_GetInfo` +
+`VixDiskLib_QueryAllocatedBlocks` against lab vCenter 8.0.1 / ESXi 8,
+transports `nbd` and `nbdssl`, plus a standalone ESXi 8.0.3 host with
+no vCenter (Step 13). Validation method:
 `tests/integration/` (the session-scoped `lab` fixture creates a temporary
 empty VM with a 10 GiB disk and destroys it when the pytest session ends).
 
@@ -384,6 +386,155 @@ compression on each IO. Proof:
 `tests/integration/test_nfc_read_write.py` (`fastlz`) and
 `tests/perf/test_compare.py`.
 
+## Step 13 — Direct ESXi (`ha-nfc`) without vCenter
+
+Same SSL-hook technique (Step 4), this time pointing VDDK 8.0.3
+straight at a standalone ESXi 8.0.3 host (`vmxSpec=moref=<N>`,
+`serverName=<esxi-ip>`, no vCenter in the topology). Confirmed
+OpenVixDiskLib's hardcoded `NFC_SERVICE_MOID = "nfcService"` fails on
+this host with `vmodl.fault.ManagedObjectNotFound` *before* touching
+the capture — reproduced with plain `openvixdisklib` calls, no hook
+needed to see that failure.
+
+The capture showed VDDK does not hardcode the moref either: it calls
+an undocumented `RetrieveInternalContent` on the `ServiceInstance`
+moref first, and reads `nfcService` from the reply (`ha-nfc-service`
+on this host, vs. `nfcService` in the earlier vCenter capture).
+`NfcGetVmFilesResponse.service` was `nfc` (not `vpxa-nfc`), and its
+`host` field was **absent** — the authd endpoint is implicitly the
+same host already logged into. Full detail in `docs/nfc_auth.md`
+("Direct ESXi (no vCenter)").
+
+Fix: `_nfc_service_moid()` in `openvixdisklib/nfc_auth.py` issues the
+`RetrieveInternalContent` call as raw SOAP over the existing stub
+connection (its response schema has ~20 other undocumented morefs not
+worth registering with pyVmomi's type system for one field), and
+`connect_authd()` takes a `fallback_host` used when `ticket.host` is
+unset. Validated end-to-end (`ConnectEx`/`Open`/`Read`, `nbd` and
+`nbdssl`) against the live host.
+
+## Step 14 — `VixDiskLib_GetInfo` capacity
+
+Extended the ctypes probe from Step 13 to call `VixDiskLib_GetInfo`
+after `Open`, under the SSL hook plus a `write`/`read` interceptor on
+fd 902 (Step 7), to see what wire traffic `GetInfo` adds.
+
+Result: **no new SOAP or authd traffic** — the same `RetrieveContent`
++ `Login` + `NfcGetVmFiles` + authd sequence as a plain `Open`. All the
+extra traffic is inside the already-open NFC/AIO session: ~20 more
+`DDB_GET` (type 11) requests right after `OPEN_FILE`, for keys like
+`adapterType`, `uuid`, `geometry.cylinders`, `geometry.biosCylinders`,
+etc. (full list in `docs/nfc_open.md`).
+
+Dumping every byte of the `OPEN_FILE` reply (not just the fields the
+earlier Open-only capture had labeled) found `capacity` (offset 28,
+`uint64` bytes) and `physGeo` (offsets 40/44/48) already present —
+verified they match `VixDiskLibInfo.capacity`/`physGeo` from the same
+`GetInfo` call exactly. Only `biosGeo`, `adapterType`, and `uuid` are
+genuinely `DDB_GET`-only; `biosGeo` came back "key not found" (zeros)
+on this unencrypted lab disk.
+
+Fix: extended `_parse_open_reply` in `openvixdisklib/nfc_open.py` to
+also read those offsets, added `nfc_open.DiskInfo`/`DiskGeometry`, and
+exposed `VixDiskLibHandle.get_info()`. No new NFC message type was
+needed — `DDB_GET` (`adapterType`/`uuid`/`biosGeo`) is still open work.
+Validated against the live host: `capacity_sectors=33554432`
+(16 GiB), `phys_geo=(2088, 255, 63)`, matching native VDDK's
+`GetInfo` on the same disk.
+
+## Note — CBT needed no reverse engineering
+
+Investigated change-block tracking (backlog item "CBT /
+`QueryAllocatedBlocks`") expecting an NFC capture like the steps above.
+It turned out `VirtualMachine.QueryChangedDiskAreas` — the actual
+changed-byte-range query backup tools use — is public pyVmomi API with
+no VDDK/NFC involvement at all; only `VixDiskLib_QueryAllocatedBlocks`
+(disk-internal allocated-block bitmap, a different and lesser feature)
+needed NFC work (done separately, see Step 15 below). Implemented as
+`openvixdisklib.nfc_auth.enable_change_tracking` /
+`disk_change_id` / `query_changed_disk_areas`; validated end-to-end
+against a temp VM on the lab (enable CBT, snapshot, write a known
+sector, snapshot, query — the written sector fell inside the reported
+extent). Full workflow and lab evidence: `docs/cbt.md`.
+
+## Step 15 — `VixDiskLib_QueryAllocatedBlocks` (AIO type 13)
+
+Same SSL/write-hook technique, extended to `VixDiskLib_QueryAllocatedBlocks`
+after `Open`. A first capture with `startSector=0` produced a request
+where two 0-valued 8-byte fields were ambiguous — either could plausibly
+be `start_offset_bytes`. Implementing from that guess alone put
+`start_offset_bytes` at the wrong offset (8 instead of 24) and passed
+every zero-start test while silently returning wrong (all-empty)
+results for any non-zero start. A second capture with a **non-zero**
+`startSector` against a region already known (from the first capture)
+to be allocated broke the tie and found the real field order.
+
+A second, independent bug (bitmap reply length) was caught the same
+way: `ceil(chunk_count/8)` matched the observed reply length for
+`chunk_count=16384` (already a multiple of 4) but under-read and
+desynced the connection for `chunk_count=16` — the reply pads the
+bitmap to a 4-byte boundary. Diagnosed by testing candidate `extra_recv`
+byte counts against whether the *next* AIO round-trip (a normal
+`CLOSE_FILE`) completed cleanly, rather than guessing from a single
+capture.
+
+Full protocol detail, the exact request/reply layout, and both bugs:
+`docs/nfc_read.md`. Implemented as
+`openvixdisklib.nfc_open.NfcDisk.query_allocated_blocks`
+(`AllocatedBlock` dataclass) and
+`VixDiskLibHandle.query_allocated_blocks`. Validated against the live
+ESXi lab: full-disk query, a known-allocated sub-range, and an aligned
+empty range all match native VDDK's own output on the same disk.
+
+## Step 16 — `DDB_GET` (AIO type 11)
+
+Already partly captured as a side effect of Step 14 (`VixDiskLib_GetInfo`
+triggers ~28 `DDB_GET` calls); no new capture was needed, just decoding
+the request/reply pairs from that saved log by matching `opId` across
+both directions. Confirmed the request's first 8 bytes equal the
+`OPEN_FILE` handle from the same capture, and that a "found" reply's
+extra is plain ASCII text (`b"lsilogic"`, `b"2088"`, ...), not binary —
+matching how a VMDK descriptor's DDB section stores key/value pairs as
+text. No padding on the reply extra (unlike Step 15's bitmap),
+confirmed by decoding all 28 request/reply pairs from one capture in
+sequence without desync.
+
+Implemented as `NfcDisk.ddb_get(key) -> str | None` and
+`NfcDisk.query_full_info() -> DiskInfo` (the 5 keys needed for
+`bios_geo`/`adapter_type`/`uuid`), wired into
+`VixDiskLibHandle.get_info` in place of the OPEN_FILE-only version
+from Step 14 — `get_info` now matches real VDDK's `VixDiskLib_GetInfo`
+completely, including paying the same round-trip cost. Full layout:
+`docs/nfc_open.md`. Validated against the live ESXi lab: matches
+native VDDK's `GetInfo` output on the same disk exactly.
+
+## Note — `NFC_DELTA_DISK` needed no protocol work either
+
+Investigated the backlog item "`NFC_DELTA_DISK` (reading directly
+from a snapshot chain)" expecting a distinct wire message or OPEN_FILE
+variant, similar to the CBT/`QueryAllocatedBlocks` split earlier.
+`strings` on `libvixDiskLib.so` found `NFC_DELTA_DISK` is a **file-type
+value** (like `NFC_DISK`), used by an internal VDDK client-side
+heuristic ("`"%s" would probably benefit from bitmap copying, so
+overriding file type to NFC_DELTA_DISK`") — a VMFS-only optimization
+for very sparse redo logs, skipped entirely on NFS per an adjacent
+string, and never observed to trigger in this lab's captures (no such
+log line, `strings`-confirmed heuristic notwithstanding).
+
+Verified end-to-end that reading, writing, and `query_allocated_blocks`
+against an actual post-snapshot delta file all already work correctly
+with the existing NFC_DISK-only implementation — no code change
+needed. The one real finding from this investigation was a gotcha, not
+a gap: an initial test that wrote a sector and immediately queried
+allocated blocks *on the same still-open write handle* reported the
+write as unallocated; closing the handle first (or opening a separate
+one) reported it correctly. Reproduced identically against **native
+VDDK** on the same delta file (two-process capture, since loading
+native VDDK in the same process as pyVmomi segfaults on this host's
+OpenSSL — see `docs/ssl_hook.md`'s Limits section), so this is real
+server/VMFS behavior, not specific to either client. Documented as a
+`query_allocated_blocks` caveat in `docs/nfc_read.md`.
+
 ## What to write down
 
 After a stage works:
@@ -404,8 +555,5 @@ OpenVixDiskLib.
 
 Not yet reversed, same loop as above:
 
-- `DDB_GET` / disk geometry, zlib/skipz compression, encrypted disks
-- `NFC_DELTA_DISK`, CBT / `QueryAllocatedBlocks`
-- `VixDiskLib_GetInfo` capacity
+- zlib/skipz compression, encrypted disks
 - Host-switch AIO messages
-- Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
