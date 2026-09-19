@@ -23,7 +23,8 @@ available):
 
 - `VixDiskLib_ConnectEx` (UID credentials; vCenter or direct ESXi)
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
-- `VixDiskLib_Read` (optional ``skip_decompression`` packs FastLZ extras)
+- `VixDiskLib_Read` (optional ``skip_decompression`` packs compressed
+  extras as-is, whichever algorithm the disk was opened with)
 - `VixDiskLib_Write`
 - `VixDiskLib_GetInfo` (capacity and physical geometry from the `Open`
   reply; `biosGeo`/`adapterType`/`uuid` from `DDB_GET`, matching real
@@ -33,14 +34,15 @@ available):
 - Changed Block Tracking: `openvixdisklib.nfc_auth.enable_change_tracking`
   / `disk_change_id` / `query_changed_disk_areas` (public VIM API, not
   part of VixDiskLib itself; see `docs/cbt.md`)
+- NBD IO compression: zlib, FastLZ, and SkipZ (`VIXDISKLIB_FLAG_OPEN_COMPRESSION_{ZLIB,FASTLZ,SKIPZ}`;
+  see `docs/nfc_read.md`)
 
 Reading/writing a snapshot delta file directly (and running
 `query_allocated_blocks` against it) already works — `NFC_DELTA_DISK`
 turned out to be an optional VMFS-only VDDK client optimization, not a
 correctness requirement (see `docs/reverse_engineering_procedure.md`).
 
-Not implemented: compression open flags other than FastLZ, and
-encrypted disks.
+Not implemented: encrypted disks.
 
 Requires Python 3.10 or later.
 

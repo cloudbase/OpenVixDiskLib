@@ -59,8 +59,12 @@ def _nfc_compression(flags: int) -> int:
     )
     if alg == 0:
         return nfc_open.NFC_COMPRESSION_NONE
+    if alg == VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB:
+        return nfc_open.NFC_COMPRESSION_ZLIB
     if alg == VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ:
         return nfc_open.NFC_COMPRESSION_FASTLZ
+    if alg == VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ:
+        return nfc_open.NFC_COMPRESSION_SKIPZ
     if alg & (alg - 1):
         raise NotImplementedError(
             "Cannot set two or more NBD compression algorithms at the same time"
@@ -286,8 +290,9 @@ class VixDiskLibHandle:
             disk_path: Datastore path of the VMDK.
             flags: Open flags. ``VIXDISKLIB_FLAG_OPEN_READ_ONLY`` opens
                 the disk read-only; omit it for write.
-                ``VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`` compresses
-                NFC IO. zlib and skipz are not implemented.
+                ``VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB``,
+                ``_FASTLZ``, and ``_SKIPZ`` each compress NFC IO with
+                their respective algorithm; at most one may be set.
             aio_buffer_size: NFC AIO extra size in bytes, advertised in
                 OPEN_SESSION. Default 64 KiB. ESXi 8 accepts 2 MiB
                 (``2097152``) and rejects 16 MiB and 32 MiB. This is an

@@ -535,6 +535,47 @@ OpenSSL — see `docs/ssl_hook.md`'s Limits section), so this is real
 server/VMFS behavior, not specific to either client. Documented as a
 `query_allocated_blocks` caveat in `docs/nfc_read.md`.
 
+## Step 17 — ZLIB and SkipZ NBD compression
+
+Same SSL-hook technique as FASTLZ (Step 12), pointed at
+`VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB` (`1 << 4`) and
+`_SKIPZ` (`1 << 6`) in turn:
+
+- Handshake, `OPEN_FILE` flags, and the IO opcode's compression-type
+  placement (high 32 bits, direction in the low 32) are identical to
+  FASTLZ — only the type value differs: `1` zlib, `3` SkipZ (`2` stays
+  FastLZ). Same offset-36 compressed-size field, same per-fragment
+  type-`0` fallback when compression doesn't shrink a fragment.
+- ZLIB's extra is a plain, standard zlib stream — decodable with
+  Python's stdlib `zlib` module directly, no custom framing at all.
+  The easiest of the three to implement.
+- SkipZ initially looked identical to "no compression" — the first
+  capture used an all-non-zero pattern, which (correctly) fell back to
+  type `0` on both write and read, same as FASTLZ/zlib would for
+  incompressible data. Only after switching to a pattern with real
+  zero-filled runs did SkipZ actually engage (type `3`) and reveal its
+  real format: an 8-byte header (`total_length`, reserved) followed by
+  `(offset, length, <raw bytes>)` triples, one per non-zero run —
+  zero runs are omitted entirely rather than compressed. A second
+  capture with two separate non-zero runs (different sizes, at
+  non-adjacent offsets) was needed to confirm the per-run header
+  repeats *interleaved* with each run's data (header, data, header,
+  data, …), not as a separate table of headers followed by all the
+  data. Full layout: `docs/nfc_read.md`.
+
+Implemented as `_skipz_compress`/`_skipz_decompress` in
+`openvixdisklib/nfc_open.py` (no external dependency, unlike FastLZ's
+`pyfastlz`) and wired into `NfcDisk.write`/`readinto` alongside the
+existing FASTLZ branch; `_nfc_compression` in `openvixdisklib.py` maps
+the two new `VIXDISKLIB_FLAG_OPEN_COMPRESSION_*` flags through.
+Validated against the live ESXi lab: round-tripped all three
+algorithms through `openvixdisklib` itself, then specifically
+cross-checked SkipZ's byte-level (non-sector-aligned) run encoding by
+writing with `openvixdisklib` and reading back with **native VDDK** on
+the same fragment — confirming the server accepts arbitrary run
+boundaries, not just the sector-aligned ones the captures happened to
+use.
+
 ## What to write down
 
 After a stage works:
@@ -555,5 +596,5 @@ OpenVixDiskLib.
 
 Not yet reversed, same loop as above:
 
-- zlib/skipz compression, encrypted disks
+- encrypted disks
 - Host-switch AIO messages
