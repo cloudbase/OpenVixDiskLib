@@ -45,11 +45,11 @@ Little-endian, after the usual 16-byte AIO header
 | Offset | Type     | VDDK `Read(start, n)`                                      |
 | ------ | -------- | ---------------------------------------------------------- |
 | 0      | `uint64` | File handle from `OPEN_FILE`                               |
-| 8      | `uint64` | Direction in low 32 bits; FastLZ type `2` in high 32 bits  |
+| 8      | `uint64` | Direction in low 32 bits; compression type in high 32 bits |
 | 16     | `uint64` | Byte offset                                                |
 | 24     | `uint64` | Byte length                                                |
 | 32     | `uint32` | Byte length (same value)                                   |
-| 36     | `uint32` | Byte length, or compressed extra size when type is FastLZ  |
+| 36     | `uint32` | Byte length, or compressed extra size when compressed      |
 | 40     | `uint32` | `0`                                                        |
 
 An earlier guess that offset 36 was `NFC_DISK` (`2`) was wrong: a
@@ -57,24 +57,65 @@ An earlier guess that offset 36 was `NFC_DISK` (`2`) was wrong: a
 read that sent `(512, 2, 0)` still worked for one sector; OpenVixDiskLib
 now matches VDDK.
 
-`VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ` does not change OPEN_FILE
-flags. The IO opcode at offset 8 is a `uint64`: low 32 bits are still
-`0`/`1` (write/read), high 32 bits are the NFC compression type
-(`2` = FastLZ). OPEN still uses handshake `PlainText`.
+`VIXDISKLIB_FLAG_OPEN_COMPRESSION_{ZLIB,FASTLZ,SKIPZ}` do not change
+OPEN_FILE flags. The IO opcode at offset 8 is a `uint64`: low 32 bits
+are still `0`/`1` (write/read), high 32 bits are the NFC compression
+type actually used for *this fragment* — `0` none, `1` zlib, `2`
+FastLZ, `3` SkipZ. At most one compression open flag may be set; the
+server (or, for writes, OpenVixDiskLib itself) still falls back to
+type `0` per fragment when compressing that fragment would not shrink
+it. OPEN still uses handshake `PlainText`.
 
-| Open flag / wire                         | Request extra                         | Reply extra                                      |
-| ---------------------------------------- | ------------------------------------- | ------------------------------------------------ |
-| No compression flag                      | Raw `length` bytes on write           | Raw fragment at offset 32                        |
-| FASTLZ, data that shrinks                | FastLZ bytes; offset 36 = packed size | Opcode type `2`; extra is FastLZ of offset 32    |
-| FASTLZ, incompressible                   | Raw bytes; opcode type `0`            | Opcode type `0`; extra is raw                    |
+| Open flag / wire                    | Request extra                                  | Reply extra                                          |
+| ----------------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| No compression flag                 | Raw `length` bytes on write                    | Raw fragment at offset 32                            |
+| ZLIB, data that shrinks             | Standard zlib stream; offset 36 = packed size  | Opcode type `1`; extra is a zlib stream of offset 32 |
+| FASTLZ, data that shrinks           | FastLZ bytes; offset 36 = packed size          | Opcode type `2`; extra is FastLZ of offset 32        |
+| SKIPZ, at least one all-zero byte   | Run-list format below; offset 36 = packed size | Opcode type `3`; extra is run-list of offset 32      |
+| Any of the above, no size reduction | Raw bytes; opcode type `0`                     | Opcode type `0`; extra is raw                        |
 
-Reads with FASTLZ always *request* type `2`. The server may answer type
-`2` or fall back to type `0`. Decompress into the uncompressed fragment
-length at offset 32 and copy to the dest at offset 28.
+Reads with a compression flag set always *request* that type. The
+server may answer with that type or fall back to type `0`. Decompress
+into the uncompressed fragment length at offset 32 and copy to the
+dest at offset 28.
 
 64 KiB chunks use FastLZ level 2 (first byte has bit 5 set). Smaller
 chunks use level 1. VDDK’s URL form is `FASTLZ-vpxa-nfc://…`; authd
 `PROXY` is unchanged.
+
+### ZLIB (type `1`)
+
+The extra is a standard zlib stream (`zlib.compress`/`zlib.decompress`
+in Python; the 2-byte header starts `78 01` in this lab's captures) of
+exactly the fragment's uncompressed bytes — no NFC-specific framing at
+all beyond the usual opcode/offset-36-length fields shared with
+FastLZ. This makes zlib the simplest of the three to implement.
+
+### SkipZ (type `3`)
+
+Captured from native VDDK writing/reading a fragment with real
+zero-filled runs (an incompressible, all-non-zero fragment falls back
+to type `0`, same as FastLZ/zlib). The extra is not general-purpose
+compression — it only omits runs of zero bytes, keeping everything
+else raw:
+
+```
+uint32 total_length     (== this fragment's uncompressed length)
+uint32 reserved         (0 in every capture)
+repeated, one per non-zero run, in ascending offset order:
+    uint32 run_offset   (byte offset within this fragment)
+    uint32 run_length
+    <run_length bytes of raw data>
+```
+
+A fragment that is entirely zero encodes as just the 8-byte header
+with no runs at all (verified against native VDDK: a write of all
+zeros round-trips through a real ESXi session as an 8-byte SkipZ
+extra). Run boundaries are **not required to be sector- or any other
+kind of aligned** — verified by writing three non-zero runs at
+arbitrary byte offsets (137, 900, 1990) with `openvixdisklib`'s own
+byte-level scanner and reading the result back correctly with native
+VDDK on the same fragment.
 
 ## Reply
 
@@ -91,7 +132,7 @@ Reply payload (handle is zeroed; lengths describe this fragment):
 | 24     | `uint32` | Total request length                                                 |
 | 28     | `uint32` | Fragment byte offset **in this request** (`0`, `65536`, …), not disk |
 | 32     | `uint32` | This fragment’s uncompressed byte length                             |
-| 36     | `uint32` | Same as offset 32, or compressed extra size when type is FastLZ      |
+| 36     | `uint32` | Same as offset 32, or compressed extra size when compressed          |
 | 40     | `uint32` | `0`                                                                  |
 
 When there is a single fragment, offsets 24–31 look like a `uint64`
@@ -144,22 +185,26 @@ fragments).
 ## Skip decompression (OpenVixDiskLib extension)
 
 `VixDiskLib_Read` always fills `buf` with uncompressed sector bytes.
-OpenVixDiskLib can skip FastLZ decode so a backup application can
-forward the compressed data as-is, avoiding unnecessary re-compression.
+OpenVixDiskLib can skip decoding (zlib, FastLZ, or SkipZ, whichever the
+disk was opened with) so a backup application can forward the
+compressed data as-is, avoiding unnecessary re-compression.
 
 `NfcDisk.readinto(..., skip_decompression=True)` and
 `VixDiskLibHandle.read(..., skip_decompression=True)` still send one
 IO request and wait until uncompressed `filled == length`. They do
 **not** decompress. Extras are packed densely from offset 0 of `buf`.
-`ReadResult.fragments` describes each extra. Type `2` extras are
-FastLZ; type `0` fallbacks are raw. Concatenating extras is not a
-valid FastLZ stream; the caller must use the table to split them.
+`ReadResult.fragments` describes each extra, tagged with its own
+`compression_type` — a single read's fragments are not all guaranteed
+to share one type, since any fragment that did not shrink still comes
+back raw (type `0`) regardless of the open's compression flag.
+Concatenating extras is not a valid compressed stream of any of the
+three algorithms; the caller must use the table to split them.
 
 | Field                  | Meaning                                                                                          |
 | ---------------------- | ------------------------------------------------------------------------------------------------ |
 | `dest`                 | Byte offset **in this uncompressed read** (NFC payload 28). Not a disk LBA or VMDK file offset.  |
 | `uncompressed_length`  | Uncompressed fragment size (NFC payload 32).                                                     |
-| `compression_type`     | `NFC_COMPRESSION_NONE` (0) or `NFC_COMPRESSION_FASTLZ` (2).                                      |
+| `compression_type`     | `NFC_COMPRESSION_NONE` (0), `_ZLIB` (1), `_FASTLZ` (2), or `_SKIPZ` (3), per fragment.           |
 | `offset`               | Start of this extra in packed `buf` (receive order, densely from 0).                             |
 | `length`               | Extra size on the wire.                                                                          |
 
@@ -170,11 +215,11 @@ Disk byte address of a fragment is `start_sector * 512 + dest`. A
 `buf` is sized for the uncompressed request, so it is always large
 enough. Default `read` still decompresses; `fragments` is empty and
 `compressed_length` is still the extra bytes on the wire.
-`skip_decompression` with a plain (no FASTLZ) open only records raw
-extras (`compressed_length == uncompressed_length`).
+`skip_decompression` with a plain (no compression) open only records
+raw extras (`compressed_length == uncompressed_length`).
 
 This is not `VixDiskLib_Read`. Do not add an open flag for it;
-compression on the wire is already the FASTLZ open flag.
+compression on the wire is already the open's compression flag.
 
 A 32 MiB read at 64 KiB extras is 512 fragments in **one** result. A
 2 MiB OPEN_SESSION extra (`aio_buffer_size=2097152`) is 16 fragments
@@ -266,5 +311,4 @@ and expect it to reflect that write.
 
 ## What is still VDDK-only
 
-- zlib and skipz NBD compression flags
 - `VixDiskLib_ReadAsync` (same IO messages, different client threading)
