@@ -17,17 +17,17 @@ from VDDK 8 NBD traffic; see `docs/`.
 
 ## Status
 
-Implemented against vCenter 8 / ESXi 8. Default transport is `nbdssl`
-(`nbd` is still available):
+Implemented against vCenter 8 / ESXi 8, including a standalone ESXi
+host with no vCenter. Default transport is `nbdssl` (`nbd` is still
+available):
 
-- `VixDiskLib_ConnectEx` (UID credentials)
+- `VixDiskLib_ConnectEx` (UID credentials; vCenter or direct ESXi)
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
 - `VixDiskLib_Read` (optional ``skip_decompression`` packs FastLZ extras)
 - `VixDiskLib_Write`
 
 Not implemented: compression open flags other than FastLZ, CBT /
-allocated-block queries, disk geometry (`DDB_GET`), encrypted disks,
-and direct ESXi `ha-nfc` without vCenter `vpxa-nfc`.
+allocated-block queries, disk geometry (`DDB_GET`), and encrypted disks.
 
 Requires Python 3.10 or later.
 
