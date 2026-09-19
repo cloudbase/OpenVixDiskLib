@@ -317,8 +317,7 @@ I/O: `docs/nfc_read.md`, `docs/nfc_write.md`, and
 
 ## What is still VDDK-only
 
-- zlib and skipz compression / encryption keys (`DDB_GET` is
-  implemented for the plain, non-encrypted keys covered above)
+- zlib and skipz compression
 - Host-switch (`NFC_AIO_SWITCH_HOST_*`)
 
 Reading/writing a snapshot delta file directly, and running
@@ -326,6 +325,10 @@ Reading/writing a snapshot delta file directly, and running
 existing implementation — `NFC_DELTA_DISK` turned out to be an
 optional VMFS-only VDDK client optimization, not a correctness
 requirement; see `docs/reverse_engineering_procedure.md`.
+
+Reading/writing an encrypted disk also already works with the existing
+implementation — ESXi handles encryption transparently below NFC
+whenever the host already holds the key; see `docs/encryption.md`.
 
 Reads after open are in `docs/nfc_read.md`. Writes are in
 `docs/nfc_write.md`.

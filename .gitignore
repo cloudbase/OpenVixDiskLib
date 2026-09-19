@@ -50,3 +50,7 @@ coverage.html
 
 # Lab credentials and VM/snapshot names for integration tests.
 .test_config.yaml
+
+# Lab setup scripts/configs with hardcoded lab credentials (vCenter, ESXi).
+# See docs/encryption_lab_setup.md for the sanitized procedure.
+.lab
