@@ -64,7 +64,13 @@ NFC_AIO_MSG_CLOSE_FILE = 5
 NFC_AIO_MSG_IO = 7
 NFC_AIO_MSG_SET_SOCK_OPTS = 9
 NFC_AIO_MSG_DDB_GET = 11
+NFC_AIO_MSG_QUERY_ALLOCATED_BLOCKS = 13
 NFC_AIO_MSG_SET_RES_POOL = 22
+
+# Chunk size used in this project's capture/validation of
+# query_allocated_blocks (128 sectors = 64 KiB); not a documented VDDK
+# default, just a convenient granularity that worked in this lab.
+NFC_QUERY_ALLOCATED_BLOCKS_CHUNK_SECTORS = 128
 
 # Open-file body: file type NFC_DISK. 0x1e is what VDDK sends for
 # VIXDISKLIB_FLAG_OPEN_READ_ONLY; writable opens clear bit 0x04 (0x1a).
@@ -80,6 +86,45 @@ NFC_AIO_IO_READ = 1
 # fall back to type 0 with raw extra data.
 NFC_COMPRESSION_NONE = 0
 NFC_COMPRESSION_FASTLZ = 2
+
+
+@dataclass(frozen=True, slots=True)
+class DiskGeometry:
+    """CHS geometry, matching VDDK's ``VixDiskLibGeometry``."""
+
+    cylinders: int
+    heads: int
+    sectors: int
+
+
+@dataclass(frozen=True, slots=True)
+class AllocatedBlock:
+    """One allocated run, matching VDDK's ``VixDiskLibBlock`` (sectors)."""
+
+    offset: int
+    length: int
+
+
+@dataclass(frozen=True, slots=True)
+class DiskInfo:
+    """Matches VDDK's ``VixDiskLibInfo``.
+
+    ``phys_geo`` and ``capacity_sectors`` are read directly off
+    OPEN_FILE (offsets 40/44/48 and 28 respectively) — free, no extra
+    NFC round trip. ``bios_geo``, ``adapter_type``, and ``uuid`` come
+    from ``DDB_GET`` (see ``NfcDisk.ddb_get`` / ``query_full_info``,
+    ``docs/nfc_open.md``): each is a real round trip, matching what
+    real VDDK's ``VixDiskLib_GetInfo`` does. ``bios_geo`` defaults to
+    all zeros and ``adapter_type``/``uuid`` to ``None`` when the disk
+    has no snapshots or predates that DDB key (VDDK does the same for
+    a missing key).
+    """
+
+    capacity_sectors: int
+    phys_geo: DiskGeometry
+    bios_geo: DiskGeometry = DiskGeometry(cylinders=0, heads=0, sectors=0)
+    adapter_type: str | None = None
+    uuid: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +305,7 @@ class NfcDisk:
         compression: int = NFC_COMPRESSION_NONE,
         aio_buffer_size: int = NFC_AIO_BUFFER_SIZE,
         aio_buffer_count: int = NFC_AIO_BUFFER_COUNT,
+        info: DiskInfo | None = None,
     ) -> None:
         """Wrap an AIO session that already has ``path`` open.
 
@@ -275,6 +321,8 @@ class NfcDisk:
                 at most this large.
             aio_buffer_count: OPEN_SESSION buffer pool count (default
                 ``NFC_AIO_BUFFER_COUNT``).
+            info: Capacity/geometry from the OPEN_FILE reply. ``None``
+                before the reply arrives.
         """
         self._sock = sock
         self._op_id = 0
@@ -284,6 +332,7 @@ class NfcDisk:
         self.compression = compression
         self.aio_buffer_size = aio_buffer_size
         self.aio_buffer_count = aio_buffer_count
+        self.info = info
         self._closed = False
 
     def _next_op_id(self) -> int:
@@ -516,6 +565,150 @@ class NfcDisk:
                 f"expected type={NFC_AIO_MSG_IO} opId={op_id}"
             )
 
+    def query_allocated_blocks(
+        self,
+        start_sector: int,
+        num_sectors: int,
+        chunk_size_sectors: int = NFC_QUERY_ALLOCATED_BLOCKS_CHUNK_SECTORS,
+    ) -> tuple[AllocatedBlock, ...]:
+        """Return allocated (non-sparse) runs. Matches ``VixDiskLib_QueryAllocatedBlocks``.
+
+        Captured from VDDK: a 48-byte request::
+
+            uint64 handle
+            uint64 reserved (0)
+            uint64 chunk_size_bytes       (chunk_size_sectors * sector_size)
+            uint64 start_offset_bytes     (start_sector * sector_size)
+            uint64 chunk_count            (num_sectors // chunk_size_sectors)
+            uint64 reserved (0)
+
+        (``start_offset_bytes`` and the first ``reserved`` field are
+        easy to swap — both are 0 in a ``start_sector=0`` capture,
+        which is what an earlier draft of this method got wrong; a
+        second capture with a non-zero ``start_sector`` was needed to
+        tell them apart.)
+
+        The reply echoes a 48-byte body whose offset 32 carries the
+        same chunk count back, followed by a bitmap extra — one bit
+        per chunk, LSB-first, set when that chunk contains allocated
+        data, padded up to a **4-byte boundary** (``ceil(chunk_count / 8)``
+        alone under-reads and desyncs the connection whenever that
+        raw byte count isn't already a multiple of 4).
+        This mirrors VDDK's own client-side behavior of run-length
+        merging contiguous set bits into ``VixDiskLibBlock`` entries
+        (offset/length here are in **sectors**, matching the public
+        VDDK struct, unlike the bytes used on the wire). See
+        ``docs/nfc_read.md``.
+
+        Args:
+            start_sector: Sector offset from the start of the disk;
+                must be a multiple of ``chunk_size_sectors`` (the
+                server returns an AIO error otherwise).
+            num_sectors: Number of sectors to query; must be a multiple
+                of ``chunk_size_sectors``.
+            chunk_size_sectors: Minimum run granularity, in sectors.
+        """
+        if num_sectors % chunk_size_sectors != 0:
+            raise ValueError("num_sectors must be a multiple of chunk_size_sectors")
+        if start_sector % chunk_size_sectors != 0:
+            raise ValueError("start_sector must be a multiple of chunk_size_sectors")
+        chunk_count = num_sectors // chunk_size_sectors
+        bitmap_bytes = -(-((chunk_count + 7) // 8) // 4) * 4
+        request = struct.pack(
+            "<QQQQQQ",
+            self.handle,
+            0,
+            chunk_size_sectors * self.sector_size,
+            start_sector * self.sector_size,
+            chunk_count,
+            0,
+        )
+        reply = self._aio_roundtrip(
+            NFC_AIO_MSG_QUERY_ALLOCATED_BLOCKS, request, extra_recv=bitmap_bytes
+        )
+        body, bitmap = reply[:48], reply[48:]
+        reported_chunk_count = struct.unpack_from("<Q", body, 32)[0]
+        if reported_chunk_count != chunk_count:
+            raise NfcProtocolError(
+                f"QueryAllocatedBlocks reported {reported_chunk_count} chunks, "
+                f"expected {chunk_count}"
+            )
+        return _decode_allocated_bitmap(
+            bitmap, chunk_count, start_sector, chunk_size_sectors
+        )
+
+    def ddb_get(self, key: str) -> str | None:
+        """Return a VMDK descriptor DDB value, or ``None`` if unset.
+
+        Captured from VDDK: request is a 16-byte fixed payload plus the
+        key name as a raw ASCII extra (no NUL terminator, not counted
+        in ``size``, same convention as ``OPEN_FILE``'s path)::
+
+            uint64 handle
+            uint32 key_name_length
+            uint32 reserved (0)
+            <key name bytes>
+
+        Reply is 16 bytes plus a value extra, **not** padded (unlike
+        ``QueryAllocatedBlocks``'s bitmap)::
+
+            96 bits reserved/unused (always zero in this lab)
+            uint32 value_length      (0 = key not found)
+            <value bytes, ASCII text>
+
+        Values are ASCII text even for keys that sound numeric
+        (``geometry.cylinders`` comes back as the bytes ``b"2088"``,
+        not a binary int) — this matches how a VMDK descriptor file's
+        DDB (disk database) section stores keys as plain text
+        ``ddb.<key> = "<value>"`` lines. See ``docs/nfc_open.md``.
+
+        Args:
+            key: DDB key name without the ``ddb.`` prefix (for example
+                ``"adapterType"``, ``"uuid"``, ``"geometry.cylinders"``).
+        """
+        key_bytes = key.encode("ascii")
+        request = struct.pack("<QII", self.handle, len(key_bytes), 0)
+        op_id = self._aio_send(NFC_AIO_MSG_DDB_GET, request, extra=key_bytes)
+        rtype, rop, body = self._aio_recv_reply()
+        if rtype != NFC_AIO_MSG_DDB_GET or rop != op_id:
+            raise NfcProtocolError(
+                f"AIO reply type={rtype} opId={rop}, "
+                f"expected type={NFC_AIO_MSG_DDB_GET} opId={op_id}"
+            )
+        value_length = struct.unpack_from("<I", body, 12)[0]
+        if value_length == 0:
+            return None
+        return _recvn(self._sock, value_length).decode("ascii")
+
+    def query_full_info(self) -> DiskInfo:
+        """Return a ``DiskInfo`` with ``bios_geo``/``adapter_type``/``uuid`` filled in.
+
+        ``self.info`` (from OPEN_FILE) already has ``capacity_sectors``
+        and ``phys_geo`` for free; this issues 5 ``DDB_GET`` round trips
+        for the rest, matching what real VDDK's ``VixDiskLib_GetInfo``
+        does on every call. DDB values are ASCII text; geometry fields
+        are parsed as decimal integers, and any missing key falls back
+        to ``DiskInfo``'s defaults (matches VDDK: a disk with no
+        snapshots, or from before this DDB key existed, has none of
+        these set).
+        """
+        assert self.info is not None
+        bios_cylinders = self.ddb_get("geometry.biosCylinders")
+        bios_heads = self.ddb_get("geometry.biosHeads")
+        bios_sectors = self.ddb_get("geometry.biosSectors")
+        bios_geo = DiskGeometry(
+            cylinders=int(bios_cylinders) if bios_cylinders else 0,
+            heads=int(bios_heads) if bios_heads else 0,
+            sectors=int(bios_sectors) if bios_sectors else 0,
+        )
+        return DiskInfo(
+            capacity_sectors=self.info.capacity_sectors,
+            phys_geo=self.info.phys_geo,
+            bios_geo=bios_geo,
+            adapter_type=self.ddb_get("adapterType"),
+            uuid=self.ddb_get("uuid"),
+        )
+
     def close(self) -> None:
         """Close the VMDK, the AIO session, and the classic NFC session."""
         if self._closed:
@@ -591,16 +784,51 @@ def _aio_prepare(disk: NfcDisk) -> None:
     disk._aio_roundtrip(NFC_AIO_MSG_SET_RES_POOL, struct.pack("<I", 1))
 
 
-def _parse_open_reply(body: bytes) -> tuple[int, int]:
-    if len(body) < 40:
+def _decode_allocated_bitmap(
+    bitmap: bytes, chunk_count: int, start_sector: int, chunk_size_sectors: int
+) -> tuple[AllocatedBlock, ...]:
+    """Run-length-merge a QueryAllocatedBlocks bitmap into ``AllocatedBlock``s.
+
+    ``bitmap`` is one bit per chunk, LSB-first (bit 0 of byte 0 is
+    chunk 0), possibly longer than strictly needed for padding; only
+    the first ``chunk_count`` bits are read.
+    """
+    blocks = []
+    run_start = None
+    for chunk_idx in range(chunk_count):
+        allocated = (bitmap[chunk_idx // 8] >> (chunk_idx % 8)) & 1
+        if allocated and run_start is None:
+            run_start = chunk_idx
+        elif not allocated and run_start is not None:
+            blocks.append((run_start, chunk_idx - run_start))
+            run_start = None
+    if run_start is not None:
+        blocks.append((run_start, chunk_count - run_start))
+    return tuple(
+        AllocatedBlock(
+            offset=start_sector + run_chunk * chunk_size_sectors,
+            length=run_len * chunk_size_sectors,
+        )
+        for run_chunk, run_len in blocks
+    )
+
+
+def _parse_open_reply(body: bytes) -> tuple[int, int, DiskInfo]:
+    if len(body) < 52:
         raise NfcProtocolError(f"OPEN_FILE reply too short: {len(body)}")
     handle, file_type, _flags = struct.unpack_from("<QII", body, 8)
+    capacity_bytes = struct.unpack_from("<Q", body, 28)[0]
     sector_size = struct.unpack_from("<I", body, 36)[0]
+    cylinders, heads, sectors = struct.unpack_from("<III", body, 40)
     if file_type != NFC_DISK:
         raise NfcProtocolError(f"opened file type {file_type}, expected NFC_DISK")
     if sector_size == 0:
         sector_size = NFC_SECTOR_SIZE
-    return handle, sector_size
+    info = DiskInfo(
+        capacity_sectors=capacity_bytes // sector_size,
+        phys_geo=DiskGeometry(cylinders=cylinders, heads=heads, sectors=sectors),
+    )
+    return handle, sector_size, info
 
 
 def open_disk(
@@ -667,9 +895,10 @@ def open_disk(
         open_body = struct.pack("<IIIIII", len(path_b), 0, 0, 0, NFC_DISK, open_flags)
         open_body = open_body.ljust(60, b"\x00")
         reply = disk._aio_roundtrip(NFC_AIO_MSG_OPEN_FILE, open_body, extra=path_b)
-        handle, sector_size = _parse_open_reply(reply)
+        handle, sector_size, info = _parse_open_reply(reply)
         disk.handle = handle
         disk.sector_size = sector_size
+        disk.info = info
         return disk
     except Exception:
         sock.close()
