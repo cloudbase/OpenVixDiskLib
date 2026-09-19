@@ -535,17 +535,41 @@ OpenSSL — see `docs/ssl_hook.md`'s Limits section), so this is real
 server/VMFS behavior, not specific to either client. Documented as a
 `query_allocated_blocks` caveat in `docs/nfc_read.md`.
 
+## Note — encryption needed no NFC work either
+
+Investigated the backlog item "encrypted disks" expecting an extra
+key-provisioning VIM call, per `"Cannot push crypto key to host"` and
+similar strings in `libvddkVimAccess.so`. Building a lab to test this
+needed vCenter (a bare ESXi host cannot do VM encryption at all —
+`docs/encryption_lab_setup.md`). With a real encrypted disk available,
+the same SSL-hook capture used throughout this doc showed **no**
+`AddKey`/`ConfigureCryptoKey`/`EnableCrypto`/`PrepareCrypto` calls
+anywhere in the wire capture, and `openvixdisklib` — no
+encryption-specific code — round-tripped a known pattern through
+completely ordinary NFC read/write while the bytes on disk (confirmed
+via the raw `.vmdk` descriptor and the flat file's bytes) were genuine
+ciphertext. ESXi's storage stack handles disk encryption transparently
+below the NFC layer whenever the serving host already holds the key —
+the only case this single-host lab could produce, and, per the VDDK
+binary strings, likely the only case that doesn't need the "push key
+to host" step at all. Full investigation and the one case this leaves
+untested (a host that doesn't already have the key, e.g. after a
+cross-host vMotion): `docs/encryption.md`.
+
 ## What to write down
 
 After a stage works:
 
-| Document                                | Contents                                      |
-| --------------------------------------- | --------------------------------------------- |
-| `docs/nfc_auth.md`                      | Ticket SOAP + authd wire format               |
-| `docs/nfc_open.md`                      | Classic NFC + AIO open                        |
-| `docs/nfc_read.md`                      | AIO IO / `VixDiskLib_Read`                    |
-| `docs/nfc_write.md`                     | AIO IO / `VixDiskLib_Write`                   |
-| `docs/ssl_hook.md`                      | Capture tool only                             |
+| Document                                | Contents                                        |
+| --------------------------------------- | ----------------------------------------------- |
+| `docs/nfc_auth.md`                      | Ticket SOAP + authd wire format                 |
+| `docs/nfc_open.md`                      | Classic NFC + AIO open                          |
+| `docs/nfc_read.md`                      | AIO IO / `VixDiskLib_Read`                      |
+| `docs/nfc_write.md`                     | AIO IO / `VixDiskLib_Write`                     |
+| `docs/ssl_hook.md`                      | Capture tool only                               |
+| `docs/cbt.md`                           | Changed Block Tracking (VIM API, no NFC)        |
+| `docs/encryption.md`                    | Encrypted disks (transparent below NFC)         |
+| `docs/encryption_lab_setup.md`          | Building a vCenter/NKP lab from bare ESXi       |
 | `docs/reverse_engineering_procedure.md` | This procedure (update when the method changes) |
 
 Keep the hook and ctypes driver under `/tmp`. They are not part of
@@ -555,5 +579,8 @@ OpenVixDiskLib.
 
 Not yet reversed, same loop as above:
 
-- zlib/skipz compression, encrypted disks
+- zlib/skipz compression
 - Host-switch AIO messages
+- Cross-host encrypted-disk key provisioning (`CryptoManagerHostKMS.AddKey`),
+  if it turns out to be needed — see `docs/encryption.md`'s "What this
+  does not cover"

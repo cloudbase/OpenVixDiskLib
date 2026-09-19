@@ -33,14 +33,20 @@ available):
 - Changed Block Tracking: `openvixdisklib.nfc_auth.enable_change_tracking`
   / `disk_change_id` / `query_changed_disk_areas` (public VIM API, not
   part of VixDiskLib itself; see `docs/cbt.md`)
+- Encrypted VM disks — read/write transparently with no
+  encryption-specific code (see `docs/encryption.md`)
 
 Reading/writing a snapshot delta file directly (and running
 `query_allocated_blocks` against it) already works — `NFC_DELTA_DISK`
 turned out to be an optional VMFS-only VDDK client optimization, not a
 correctness requirement (see `docs/reverse_engineering_procedure.md`).
 
-Not implemented: compression open flags other than FastLZ, and
-encrypted disks.
+Reading/writing an encrypted VM disk also already works, with no
+encryption-specific code — ESXi handles it transparently below NFC
+whenever the serving host already holds the disk's key (see
+`docs/encryption.md`).
+
+Not implemented: compression open flags other than FastLZ.
 
 Requires Python 3.10 or later.
 
