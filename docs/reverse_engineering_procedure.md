@@ -9,7 +9,8 @@ NFC work can follow the same loop instead of rediscovering it.
 
 Scope so far: `VixDiskLib_ConnectEx` + `VixDiskLib_Open` +
 `VixDiskLib_Read` + `VixDiskLib_Write` against lab vCenter 8.0.1 /
-ESXi 8, transports `nbd` and `nbdssl`. Validation method:
+ESXi 8, transports `nbd` and `nbdssl`, plus a standalone ESXi 8.0.3
+host with no vCenter (Step 13). Validation method:
 `tests/integration/` (the session-scoped `lab` fixture creates a temporary
 empty VM with a 10 GiB disk and destroys it when the pytest session ends).
 
@@ -381,8 +382,33 @@ not an OPEN_FILE bit. Capture VDDK with that flag (NBD + the port-902
 Replay: pip `pyfastlz` via `openvixdisklib/fastlz.py` (NFC extra is
 raw FastLZ, without the wrapper's 4-byte length prefix) plus `NfcDisk`
 compression on each IO. Proof:
-`tests/integration/test_nfc_read_write.py` (`fastlz`) and
-`tests/perf/test_compare.py`.
+## Step 13 — Direct ESXi (`ha-nfc`) without vCenter
+
+Same SSL-hook technique (Step 4), this time pointing VDDK 8.0.3
+straight at a standalone ESXi 8.0.3 host (`vmxSpec=moref=<N>`,
+`serverName=<esxi-ip>`, no vCenter in the topology). Confirmed
+OpenVixDiskLib's hardcoded `NFC_SERVICE_MOID = "nfcService"` fails on
+this host with `vmodl.fault.ManagedObjectNotFound` *before* touching
+the capture — reproduced with plain `openvixdisklib` calls, no hook
+needed to see that failure.
+
+The capture showed VDDK does not hardcode the moref either: it calls
+an undocumented `RetrieveInternalContent` on the `ServiceInstance`
+moref first, and reads `nfcService` from the reply (`ha-nfc-service`
+on this host, vs. `nfcService` in the earlier vCenter capture).
+`NfcGetVmFilesResponse.service` was `nfc` (not `vpxa-nfc`), and its
+`host` field was **absent** — the authd endpoint is implicitly the
+same host already logged into. Full detail in `docs/nfc_auth.md`
+("Direct ESXi (no vCenter)").
+
+Fix: `_nfc_service_moid()` in `openvixdisklib/nfc_auth.py` issues the
+`RetrieveInternalContent` call as raw SOAP over the existing stub
+connection (its response schema has ~20 other undocumented morefs not
+worth registering with pyVmomi's type system for one field), and
+`connect_authd()` takes a `fallback_host` used when `ticket.host` is
+unset. Validated end-to-end (`ConnectEx`/`Open`/`Read`, `nbd` and
+`nbdssl`) against the live host.
+
 
 ## What to write down
 
@@ -408,4 +434,3 @@ Not yet reversed, same loop as above:
 - `NFC_DELTA_DISK`, CBT / `QueryAllocatedBlocks`
 - `VixDiskLib_GetInfo` capacity
 - Host-switch AIO messages
-- Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
