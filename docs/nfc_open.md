@@ -247,9 +247,15 @@ I/O: `docs/nfc_read.md`, `docs/nfc_write.md`, and
 ## What is still VDDK-only
 
 - `DDB_GET` / geometry / zlib and skipz compression / encryption keys
-- `NFC_DELTA_DISK`, change-block tracking
+- change-block tracking
 - Host-switch (`NFC_AIO_SWITCH_HOST_*`)
 - Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
+
+Reading/writing a snapshot delta file directly, and running
+`query_allocated_blocks` against it, both already work with the
+existing implementation — `NFC_DELTA_DISK` turned out to be an
+optional VMFS-only VDDK client optimization, not a correctness
+requirement; see `docs/reverse_engineering_procedure.md`.
 
 Reads after open are in `docs/nfc_read.md`. Writes are in
 `docs/nfc_write.md`.
