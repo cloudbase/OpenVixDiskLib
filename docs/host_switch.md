@@ -58,21 +58,38 @@ below the NFC layer, transparently, for both a VM's compute moving and
 its storage moving — as long as everything stays inside the same
 vCenter-managed environment with the migration completing normally.
 
-This means `NFC_AIO_SWITCH_HOST_*` is likely reserved for a case
-neither investigation could safely produce: the **originally-connected
-host itself becoming unavailable** (entering maintenance mode,
-disconnecting, or failing) independent of whether the VM ever
-migrates — a scenario that would need to disrupt a real host serving
-other things in the lab to test, and wasn't attempted.
+## Why it's not reachable from here at all: not a public API
+
+Went looking for how a third-party client would even participate in a
+host switch — VDDK's own strings mention a `PreSwitchHost callback`
+that receives the new host's connection details, which sounded like
+something OpenVixDiskLib might need to expose too. It doesn't:
+`grep` across every header in the VDDK 8.0.3 SDK
+(`vixDiskLib.h`, `vixDiskLibPlugin.h`, `vixMntapi.h`) for
+`SwitchHost`/`Callback` finds only the documented, unrelated
+completion/progress/logging callbacks. **There is no public
+registration function for this mechanism anywhere in the SDK.**
+
+This settles the question definitively, without needing to test the
+one remaining scenario (the connected host itself becoming
+unavailable) by disrupting a real host: whatever `NFC_AIO_SWITCH_HOST_*`
+and `PreSwitchHost` actually do, they're wired into VMware's own
+internal/first-party tooling (VADP), not exposed through the SDK any
+third-party backup vendor — or OpenVixDiskLib — actually links
+against. There is no code path by which a normal `VixDiskLib_Open`/
+`Read`/`Write` client could ever trigger, observe, or need to
+implement this, regardless of what happens to the underlying hosts.
+Both empirical tests above already showed it doesn't fire for any
+vMotion scenario reachable through the public API; this closes the
+remaining theoretical gap by showing there's no public entry point for
+it to fire through in the first place.
 
 ## What this does not cover
 
-- **Losing the connected host** (maintenance mode, host failure,
-  disconnect) while an NFC session is active was not tested — the one
-  remaining plausible trigger for this mechanism, and the only one
-  left after both vMotion variants came back negative.
-- Direct-ESXi (no vCenter) sessions were not tested for either
-  scenario; everything above went through vCenter.
+- Direct-ESXi (no vCenter) sessions were not tested for either vMotion
+  scenario; everything above went through vCenter. Not expected to
+  matter, since the conclusion (no public API surface for this
+  mechanism at all) is independent of which connection path is used.
 
 ## Also found along the way: NFC needs a snapshot to open a *running* VM's disk, on any datastore
 
