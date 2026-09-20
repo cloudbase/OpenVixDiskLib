@@ -535,18 +535,50 @@ OpenSSL — see `docs/ssl_hook.md`'s Limits section), so this is real
 server/VMFS behavior, not specific to either client. Documented as a
 `query_allocated_blocks` caveat in `docs/nfc_read.md`.
 
+## Note — host-switch not needed for compute-only vMotion with shared storage
+
+Investigated the backlog item "Host-switch AIO messages"
+(`NFC_AIO_SWITCH_HOST_*`). `strings` on `libvixDiskLib.so` shows it's
+VDDK's mechanism for keeping an NFC/backup session alive across a live
+vMotion (`SWITCHHOST_VADP`, a `PreSwitchHost callback` string carrying
+a new-host descriptor). Testing it needed a second ESXi host in the
+cluster with shared storage — a real infra build, see
+`docs/host_switch_lab_setup.md`.
+
+With two hosts sharing an NFS datastore, kept a native-VDDK NFC read
+session alive (SSL-hook captured, same technique as every other
+feature) while triggering a live `RelocateVM_Task` mid-session. Result:
+completely unaffected — all reads across the migration succeeded, and
+the wire capture shows a **single TCP file descriptor** used for the
+entire session, no reconnect, no `NFC_AIO_SWITCH_HOST_*` traffic at
+all. NFC access is datastore-based, not VM/host-based: as long as the
+connected host still has a path to the datastore (true for any
+compute-only vMotion with shared storage), nothing needs to change
+when the VM's compute moves elsewhere. Full write-up, including what
+this does NOT rule out (Storage vMotion, losing the connected host):
+`docs/host_switch.md`.
+
+Also found, by accident, while building the test case: opening a
+**running** VM's disk directly over NFC failed on the new NFS
+datastore (worked instantly on VMFS, which this project's every other
+capture has used) — needed either the VM powered off, or a snapshot
+first (same "read the parent" pattern already used elsewhere). Detail
+in `docs/host_switch.md`'s last section.
+
 ## What to write down
 
 After a stage works:
 
-| Document                                | Contents                                      |
-| --------------------------------------- | --------------------------------------------- |
-| `docs/nfc_auth.md`                      | Ticket SOAP + authd wire format               |
-| `docs/nfc_open.md`                      | Classic NFC + AIO open                        |
-| `docs/nfc_read.md`                      | AIO IO / `VixDiskLib_Read`                    |
-| `docs/nfc_write.md`                     | AIO IO / `VixDiskLib_Write`                   |
-| `docs/ssl_hook.md`                      | Capture tool only                             |
-| `docs/reverse_engineering_procedure.md` | This procedure (update when the method changes) |
+| Document                                | Contents                                                              |
+| --------------------------------------- | --------------------------------------------------------------------- |
+| `docs/nfc_auth.md`                      | Ticket SOAP + authd wire format                                       |
+| `docs/nfc_open.md`                      | Classic NFC + AIO open                                                |
+| `docs/nfc_read.md`                      | AIO IO / `VixDiskLib_Read`                                            |
+| `docs/nfc_write.md`                     | AIO IO / `VixDiskLib_Write`                                           |
+| `docs/ssl_hook.md`                      | Capture tool only                                                     |
+| `docs/host_switch.md`                   | vMotion/host-switch (not needed for shared-storage compute migration) |
+| `docs/host_switch_lab_setup.md`         | Building a 2-host vMotion lab                                         |
+| `docs/reverse_engineering_procedure.md` | This procedure (update when the method changes)                       |
 
 Keep the hook and ctypes driver under `/tmp`. They are not part of
 OpenVixDiskLib.
@@ -556,4 +588,6 @@ OpenVixDiskLib.
 Not yet reversed, same loop as above:
 
 - zlib/skipz compression, encrypted disks
-- Host-switch AIO messages
+- Storage vMotion or connected-host-unavailable variants of
+  `NFC_AIO_SWITCH_HOST_*`, if either turns out to actually need it —
+  see `docs/host_switch.md`'s "What this does not cover"
