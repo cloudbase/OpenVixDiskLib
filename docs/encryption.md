@@ -95,20 +95,30 @@ encrypted via a vSphere Native Key Provider:
   correctly (a freshly-created 1 GiB disk reads back as zeros, as
   expected for an unwritten region).
 
+## Cross-host key provisioning (resolved 2026-09-20)
+
+The gap flagged below — a host that doesn't already have the disk's
+key cached — was resolved once a second ESXi host became available
+(built for the host-switch investigation, `docs/host_switch_lab_setup.md`).
+Relocated the encrypted test VM (compute **and** its disk, cold —
+powered off) to a host that had never held its key at all, then opened
+the disk on that new host: it just worked, both via `openvixdisklib`
+and via cross-checked native VDDK, decrypting correctly with zero key
+management on the client's part.
+
+vCenter pushes the key to the destination host automatically as part
+of any relocation of an encrypted VM (`RelocateVM_Task`, cold or live)
+— entirely transparent to any NFC client. The `CryptoManagerHostKMS.AddKey`
+("push crypto key to host") mechanism the binary strings pointed to
+does exist and does get exercised, but it's driven by vCenter's own
+migration workflow, not by VDDK or any NFC client. There is nothing
+for OpenVixDiskLib to implement here either: the "host doesn't have
+the key yet" case simply cannot arise for a client reading a disk
+through a normal, already-completed migration, because vCenter
+resolves it before the migration finishes.
+
 ## What this does not cover
 
-- **A host that does not already have the disk's key cached.** This is
-  the actual scenario the `CryptoManagerHostKMS.AddKey`
-  ("push crypto key to host") binary strings exist for, and it is the
-  one case this investigation could not exercise — it needs a second
-  ESXi host to migrate/clone the encrypted VM to, which this lab does
-  not have. If a real gap exists anywhere in encrypted-disk support,
-  this is where it would be: OpenVixDiskLib has no code today to fetch
-  and push a disk's encryption key to a host that lacks it, and no VIM
-  call for doing so has been identified or captured. Until that's
-  tested, treat single-host-served encrypted disks as confirmed
-  working and cross-host key provisioning as an open question, not a
-  confirmed gap.
 - Standard/KMIP external Key Management Servers were not tested — only
   vSphere Native Key Provider. The NFC-transparency conclusion should
   hold regardless of which KMS variant provisioned the key (the
