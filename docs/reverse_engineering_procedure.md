@@ -550,11 +550,14 @@ completely ordinary NFC read/write while the bytes on disk (confirmed
 via the raw `.vmdk` descriptor and the flat file's bytes) were genuine
 ciphertext. ESXi's storage stack handles disk encryption transparently
 below the NFC layer whenever the serving host already holds the key —
-the only case this single-host lab could produce, and, per the VDDK
-binary strings, likely the only case that doesn't need the "push key
-to host" step at all. Full investigation and the one case this leaves
-untested (a host that doesn't already have the key, e.g. after a
-cross-host vMotion): `docs/encryption.md`.
+initially the only case this single-host lab could produce. Once a
+second host existed (built for the host-switch investigation below),
+went back and closed the one remaining gap: relocated the encrypted VM
+(cold, compute+disk) to a host that had never held its key at all, and
+reading its disk from there just worked, decrypting correctly, with
+vCenter having pushed the key automatically as part of the migration
+— nothing for OpenVixDiskLib to implement. Full investigation:
+`docs/encryption.md`.
 
 ## What to write down
 
@@ -581,6 +584,3 @@ Not yet reversed, same loop as above:
 
 - zlib/skipz compression
 - Host-switch AIO messages
-- Cross-host encrypted-disk key provisioning (`CryptoManagerHostKMS.AddKey`),
-  if it turns out to be needed — see `docs/encryption.md`'s "What this
-  does not cover"
