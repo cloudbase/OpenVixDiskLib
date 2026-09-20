@@ -558,9 +558,19 @@ the wire capture shows a **single TCP file descriptor** for the entire
 session, no reconnect, no `NFC_AIO_SWITCH_HOST_*` traffic at all. NFC
 access is datastore-based, not VM/host-based, and the already-open
 file handle apparently stays valid across a relocation transparently,
-below the NFC layer. Full write-up, including the one case neither
-test could safely produce (the connected host itself becoming
-unavailable): `docs/host_switch.md`.
+below the NFC layer.
+
+Also checked whether a third-party client could even participate in a
+host switch at all: `grep` across every header in the VDDK 8.0.3 SDK
+for `SwitchHost`/`Callback` finds only the documented, unrelated
+completion/progress/logging callbacks — **no public registration
+function for the `PreSwitchHost` mechanism exists anywhere in the
+SDK.** This closes the investigation without needing to test the one
+remaining scenario (the connected host becoming unavailable) by
+disrupting a real host: whatever this mechanism does, it's wired into
+VMware's own internal/first-party tooling, not reachable through any
+API a third-party client — or OpenVixDiskLib — actually links against.
+Full write-up: `docs/host_switch.md`.
 
 Also found, by accident, while building the test case: opening a
 **running** (powered-on) VM's disk directly over NFC fails — on
@@ -597,7 +607,3 @@ OpenVixDiskLib.
 Not yet reversed, same loop as above:
 
 - zlib/skipz compression, encrypted disks
-- Connected-host-unavailable variant of `NFC_AIO_SWITCH_HOST_*`
-  (maintenance mode/disconnect/failure of the serving host, independent
-  of vMotion — both vMotion variants tested negative) — see
-  `docs/host_switch.md`'s "What this does not cover"
