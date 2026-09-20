@@ -535,7 +535,7 @@ OpenSSL — see `docs/ssl_hook.md`'s Limits section), so this is real
 server/VMFS behavior, not specific to either client. Documented as a
 `query_allocated_blocks` caveat in `docs/nfc_read.md`.
 
-## Note — host-switch not needed for compute-only vMotion with shared storage
+## Note — host-switch not needed for vMotion, compute-only or combined with storage
 
 Investigated the backlog item "Host-switch AIO messages"
 (`NFC_AIO_SWITCH_HOST_*`). `strings` on `libvixDiskLib.so` shows it's
@@ -545,25 +545,34 @@ a new-host descriptor). Testing it needed a second ESXi host in the
 cluster with shared storage — a real infra build, see
 `docs/host_switch_lab_setup.md`.
 
-With two hosts sharing an NFS datastore, kept a native-VDDK NFC read
-session alive (SSL-hook captured, same technique as every other
-feature) while triggering a live `RelocateVM_Task` mid-session. Result:
-completely unaffected — all reads across the migration succeeded, and
-the wire capture shows a **single TCP file descriptor** used for the
-entire session, no reconnect, no `NFC_AIO_SWITCH_HOST_*` traffic at
-all. NFC access is datastore-based, not VM/host-based: as long as the
-connected host still has a path to the datastore (true for any
-compute-only vMotion with shared storage), nothing needs to change
-when the VM's compute moves elsewhere. Full write-up, including what
-this does NOT rule out (Storage vMotion, losing the connected host):
-`docs/host_switch.md`.
+Two escalating tests, both negative. First, a compute-only vMotion
+(shared NFS datastore, only the VM's compute moved) while an
+SSL-hook-captured native-VDDK NFC read session stayed open: completely
+unaffected. Second, a much more aggressive combined storage+compute
+vMotion — a disk starting on a host-local VMFS datastore the target
+host had no path to at all, relocated to shared NFS while the VM's
+compute moved to that other host, in one `RelocateVM_Task` — still
+completely unaffected, reads succeeding even after the migration fully
+completed and the file was confirmed at its new location. Both times,
+the wire capture shows a **single TCP file descriptor** for the entire
+session, no reconnect, no `NFC_AIO_SWITCH_HOST_*` traffic at all. NFC
+access is datastore-based, not VM/host-based, and the already-open
+file handle apparently stays valid across a relocation transparently,
+below the NFC layer. Full write-up, including the one case neither
+test could safely produce (the connected host itself becoming
+unavailable): `docs/host_switch.md`.
 
 Also found, by accident, while building the test case: opening a
-**running** VM's disk directly over NFC failed on the new NFS
-datastore (worked instantly on VMFS, which this project's every other
-capture has used) — needed either the VM powered off, or a snapshot
-first (same "read the parent" pattern already used elsewhere). Detail
-in `docs/host_switch.md`'s last section.
+**running** (powered-on) VM's disk directly over NFC fails — on
+**both VMFS and NFS**, confirmed against three separate VMs. This
+project's own `lab` pytest fixture never powers on its temp VM, so
+every prior capture in this whole project has been reading a
+powered-off VM's disk without that being a deliberate choice. Needs
+either the VM powered off, or a snapshot first and read the **parent**
+disk (same pattern already used elsewhere). An earlier draft of this
+note mischaracterized this as NFS-specific — it isn't; see
+`docs/host_switch.md`'s last section for the corrected, fuller
+writeup.
 
 ## What to write down
 
@@ -588,6 +597,7 @@ OpenVixDiskLib.
 Not yet reversed, same loop as above:
 
 - zlib/skipz compression, encrypted disks
-- Storage vMotion or connected-host-unavailable variants of
-  `NFC_AIO_SWITCH_HOST_*`, if either turns out to actually need it —
-  see `docs/host_switch.md`'s "What this does not cover"
+- Connected-host-unavailable variant of `NFC_AIO_SWITCH_HOST_*`
+  (maintenance mode/disconnect/failure of the serving host, independent
+  of vMotion — both vMotion variants tested negative) — see
+  `docs/host_switch.md`'s "What this does not cover"
