@@ -39,6 +39,11 @@ Reading/writing a snapshot delta file directly (and running
 turned out to be an optional VMFS-only VDDK client optimization, not a
 correctness requirement (see `docs/reverse_engineering_procedure.md`).
 
+An NFC session also survives a live vMotion of the VM being read,
+with no code changes needed, as long as the disk stays on
+shared storage the destination host can also reach (see
+`docs/host_switch.md`).
+
 Not implemented: compression open flags other than FastLZ, and
 encrypted disks.
 
