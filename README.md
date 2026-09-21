@@ -14,12 +14,14 @@ Python naming).
 VIM login and inventory use [pyVmomi](https://github.com/vmware/pyvmomi).
 The NFC ticket, ESXi authd handshake, and disk I/O were reverse-engineered
 from VDDK 8 NBD traffic; see `docs/`. Linux HotAdd uses the public
-vSphere `ReconfigureVM` API (see `docs/hotadd.md`).
+vSphere `ReconfigureVM` API (see `docs/hotadd.md`). Linux SAN reads a
+shared VMFS LUN locally (see `docs/san.md`).
 
 ## Status
 
 Implemented against vCenter 8 / ESXi 8. Default transport is `nbdssl`
-(`nbd` is still available). Linux guests can also use `hotadd`:
+(`nbd` is still available). Linux hosts that see the VMFS LUN can use
+`san`. Linux guests can also use `hotadd`:
 
 - `VixDiskLib_ConnectEx` (UID credentials)
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
@@ -27,11 +29,14 @@ Implemented against vCenter 8 / ESXi 8. Default transport is `nbdssl`
 - `VixDiskLib_Write`
 - HotAdd on a Linux VMware guest (SCSI, NVMe, or SATA source disks,
   attached onto a proxy SCSI controller)
+- SAN on a Linux host that sees the same VMFS LUN as ESXi (NAA match,
+  local `pread` / `pwrite` of the flat extent)
 
 Not implemented: compression open flags other than FastLZ, CBT /
 allocated-block queries, disk geometry (`DDB_GET`), encrypted disks,
-direct ESXi `ha-nfc` without vCenter `vpxa-nfc`, SAN / file transports,
-Windows HotAdd, and HotAdd onto a proxy NVMe controller.
+direct ESXi `ha-nfc` without vCenter `vpxa-nfc`, file transport,
+snapshot / SESPARSE SAN chains, Windows HotAdd, and HotAdd onto a
+proxy NVMe controller.
 
 Requires Python 3.10 or later.
 
@@ -78,6 +83,7 @@ VDDK-shaped handle.
 | `openvixdisklib/nfc_auth.py`       | VIM login, NFC ticket, authd on 902                    |
 | `openvixdisklib/nfc_open.py`       | Classic NFC handshake, AIO open, sector read/write     |
 | `openvixdisklib/hotadd.py`         | Linux-guest SCSI HotAdd attach, local block I/O        |
+| `openvixdisklib/san.py`            | Linux SAN: NAA match, VMFS map, local block I/O        |
 | `openvixdisklib/fastlz.py`         | FastLZ NFC adapter (pip `pyfastlz`)                    |
 | `tests/integration/`               | Live pytest suite against a lab vCenter                |
 | `tests/perf/`                      | Throughput comparison of OpenVixDiskLib vs VDDK        |
@@ -104,13 +110,17 @@ datastore: datastore0
 hotadd_proxy:
   host: hotadd-proxy.example.com
   user: root
+iscsi_san:
+  portal: 192.0.2.10
 ```
 
 A session-scoped pytest fixture creates an empty VM with a 10 GiB thin
 disk on that datastore and tears it down when the session ends. Tests
 write known patterns and read them back. HotAdd tests SSH into
 `hotadd_proxy` (a Linux guest on the same datastore) and skip if SSH
-fails.
+fails. SAN tests bring up a loop-backed iSCSI LUN, create a VMFS
+datastore, and skip if LIO, `iscsiadm`, or software iSCSI cannot be
+used. The session lab VM is not placed on that LUN.
 
 ```bash
 tox -e integration
@@ -159,5 +169,6 @@ Lint and typecheck: `tox -e pep8`, `tox -e mypy`.
 | `docs/nfc_read.md`                      | AIO IO / `VixDiskLib_Read`       |
 | `docs/nfc_write.md`                     | AIO IO / `VixDiskLib_Write`      |
 | `docs/hotadd.md`                        | Linux-guest SCSI HotAdd          |
+| `docs/san.md`                           | Linux SAN / VMFS LUN I/O         |
 | `docs/ssl_hook.md`                      | TLS intercept used for capture   |
 | `docs/reverse_engineering_procedure.md` | How the protocol was recovered   |

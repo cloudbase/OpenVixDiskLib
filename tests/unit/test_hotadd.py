@@ -240,27 +240,29 @@ class TestHotAddDiskIO:
 
 
 class TestSelectTransport:
+    @mock.patch("openvixdisklib.openvixdisklib.san.is_available", return_value=False)
     @mock.patch(
         "openvixdisklib.openvixdisklib.hotadd.is_vmware_guest", return_value=False
     )
     def test_colon_list_skips_hotadd_on_bare_metal(
-        self, mock_guest: mock.MagicMock
+        self, mock_guest: mock.MagicMock, mock_san: mock.MagicMock
     ) -> None:
-        """Bare metal skips hotadd and uses the next usable mode."""
-        del mock_guest
+        """Bare metal without SAN skips hotadd and uses the next usable mode."""
+        del mock_guest, mock_san
         assert _select_transport("file:san:hotadd:nbdssl:nbd") == "nbdssl"
         assert _available_transports() == ["nbdssl", "nbd"]
         with pytest.raises(NotImplementedError, match="hotadd"):
             _select_transport("hotadd")
 
+    @mock.patch("openvixdisklib.openvixdisklib.san.is_available", return_value=False)
     @mock.patch(
         "openvixdisklib.openvixdisklib.hotadd.is_vmware_guest", return_value=True
     )
     def test_colon_list_selects_hotadd_in_guest(
-        self, mock_guest: mock.MagicMock
+        self, mock_guest: mock.MagicMock, mock_san: mock.MagicMock
     ) -> None:
         """A VMware guest uses hotadd when it is first in the colon list."""
-        del mock_guest
+        del mock_guest, mock_san
         assert _select_transport("file:san:hotadd:nbdssl") == "hotadd"
         assert _available_transports() == ["nbdssl", "nbd", "hotadd"]
 

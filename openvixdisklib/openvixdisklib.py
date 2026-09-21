@@ -11,7 +11,7 @@ Callers can switch with::
 ``VixDiskLibHandle.connect`` / ``open`` / ``read`` match the VDDK wrapper
 in ``tests/integration/vixdisklib.py``. VIM login uses pyVmomi; NFC ticket,
 authd, and disk I/O use ``nfc_auth`` and ``nfc_open``. Linux HotAdd uses
-``hotadd``.
+``hotadd``. Linux SAN uses ``san`` (local SCSI / VMFS I/O).
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from collections.abc import Iterator
 from pyVim.connect import Disconnect
 from pyVmomi import vim
 
-from openvixdisklib import hotadd, nfc_auth, nfc_open
+from openvixdisklib import hotadd, nfc_auth, nfc_open, san
 
 ReadResult = nfc_open.ReadResult
 ReadFragment = nfc_open.ReadFragment
@@ -88,6 +88,8 @@ def _parse_vm_moref(vmx_spec: str | None) -> str:
 def _available_transports() -> list[str]:
     """Return transports this process can use, in advertisement order."""
     modes = ["nbdssl", "nbd"]
+    if san.is_available():
+        modes.append("san")
     if hotadd.is_vmware_guest():
         modes.append("hotadd")
     return modes
@@ -98,8 +100,9 @@ def _select_transport(transport_modes: str | None) -> str:
 
     ``None`` defaults to ``nbdssl``. A colon-separated list (VDDK
     style, for example ``file:san:hotadd:nbdssl:nbd``) picks the first
-    of ``nbdssl``, ``nbd``, and ``hotadd`` that is usable here.
-    ``hotadd`` is usable only inside a VMware guest.
+    of ``san``, ``hotadd``, ``nbdssl``, and ``nbd`` that is usable here.
+    ``san`` needs a local SCSI disk. ``hotadd`` is usable only inside a
+    VMware guest.
     """
     if transport_modes is None:
         return "nbdssl"
@@ -136,11 +139,11 @@ class _Connection:
 
 
 class _DiskHandle:
-    """Opened disk (NFC or HotAdd) plus an optional authd TLS socket."""
+    """Opened disk (NFC, SAN, or HotAdd) plus an optional authd TLS socket."""
 
     def __init__(
         self,
-        disk: nfc_open.NfcDisk | hotadd.HotAddDisk,
+        disk: nfc_open.NfcDisk | hotadd.HotAddDisk | san.SanDisk,
         transport_mode: str,
         authd_sock=None,
     ) -> None:
@@ -234,10 +237,10 @@ class VixDiskLibHandle:
             snapshot_ref: Snapshot moref. Unused on the NFC ticket.
                 Required for HotAdd when the source VM is powered on.
             read_only: When False, the disk may be opened for write.
-            transport_modes: ``nbdssl``, ``nbd``, ``hotadd``, or a colon
-                list. The first usable mode is used; ``None`` defaults
-                to ``nbdssl``. ``hotadd`` is usable only in a VMware
-                guest.
+            transport_modes: ``nbdssl``, ``nbd``, ``san``, ``hotadd``,
+                or a colon list. The first usable mode is used;
+                ``None`` defaults to ``nbdssl``. ``san`` needs a local
+                SCSI disk. ``hotadd`` is usable only in a VMware guest.
             port: HTTPS port, usually 443.
             allow_untrusted: Skip management TLS verification when True.
                 When False with no ``thumbprint``, the system CA store
@@ -289,14 +292,15 @@ class VixDiskLibHandle:
         aio_buffer_size: int = nfc_open.NFC_AIO_BUFFER_SIZE,
         aio_buffer_count: int = nfc_open.NFC_AIO_BUFFER_COUNT,
     ) -> Iterator[_DiskHandle]:
-        """Open ``disk_path`` over NFC or HotAdd. Matches ``VixDiskLib_Open``.
+        """Open ``disk_path`` over NFC, SAN, or HotAdd. Matches ``VixDiskLib_Open``.
 
         Read-only NFC opens request ``NfcGetVmFiles`` (VM only). The
         VMDK path, including a snapshot parent such as ``…-000007.vmdk``,
         is sent on NFC ``OPEN_FILE``. Writable NFC opens use
         ``NfcRandomAccessOpenDisk`` and resolve a device key from the
-        disk's backing chain. ``hotadd`` SCSI-attaches the VMDK to this
-        guest (Linux proxy) and opens the local block device.
+        disk's backing chain. ``san`` maps the VMFS LUN locally.
+        ``hotadd`` SCSI-attaches the VMDK to this guest (Linux proxy)
+        and opens the local block device.
 
         Args:
             conn: Connection from ``connect``.
@@ -305,15 +309,15 @@ class VixDiskLibHandle:
                 the disk read-only; omit it for write.
                 ``VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`` compresses
                 NFC IO. zlib and skipz are not implemented. Compression
-                flags are not supported with ``hotadd``.
+                flags are not supported with ``hotadd`` or ``san``.
             aio_buffer_size: NFC AIO extra size in bytes, advertised in
                 OPEN_SESSION. Default 64 KiB. ESXi 8 accepts 2 MiB
                 (``2097152``) and rejects 16 MiB and 32 MiB. This is an
                 OpenVixDiskLib extension (VDDK uses
                 ``vixDiskLib.nfcAio.Session.BufSizeIn64KB``). Ignored
-                for HotAdd.
+                for HotAdd and SAN.
             aio_buffer_count: NFC AIO buffer pool count. Default 1.
-                VDDK's default is 4. Ignored for HotAdd.
+                VDDK's default is 4. Ignored for HotAdd and SAN.
         """
         LOG.debug("Openning VixDiskLib disk: %s", disk_path)
         compression = _nfc_compression(flags)
@@ -322,18 +326,30 @@ class VixDiskLibHandle:
             raise NotImplementedError("ConnectEx was read-only; cannot open for write")
 
         vm = vim.VirtualMachine(conn.vm_moref, conn.si._stub)
-        if conn.transport_mode == "hotadd":
+        if conn.transport_mode in ("hotadd", "san"):
             if compression != nfc_open.NFC_COMPRESSION_NONE:
                 raise NotImplementedError(
-                    "NBD compression open flags are not supported with hotadd"
+                    "NBD compression open flags are not supported with "
+                    f"{conn.transport_mode}"
                 )
-            disk = hotadd.open_disk(
-                conn.si,
-                vm,
-                disk_path,
-                snapshot_ref=conn.snapshot_ref,
-                read_only=read_only,
-            )
+            if conn.transport_mode == "hotadd":
+                disk: nfc_open.NfcDisk | hotadd.HotAddDisk | san.SanDisk = (
+                    hotadd.open_disk(
+                        conn.si,
+                        vm,
+                        disk_path,
+                        snapshot_ref=conn.snapshot_ref,
+                        read_only=read_only,
+                    )
+                )
+            else:
+                disk = san.open_disk(
+                    conn.si,
+                    vm,
+                    disk_path,
+                    snapshot_ref=conn.snapshot_ref,
+                    read_only=read_only,
+                )
             handle = _DiskHandle(disk, conn.transport_mode)
             try:
                 yield handle
