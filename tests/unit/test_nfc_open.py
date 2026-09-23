@@ -20,11 +20,15 @@ class _FakeSocket:
     def sendall(self, data: bytes) -> None:
         self.sent.append(bytes(data))
 
-    def recv_into(self, buf: memoryview) -> int:
-        n = min(len(buf), len(self._replies))
-        buf[:n] = self._replies[:n]
+    def recv_into(self, buffer: memoryview, nbytes: int = 0, flags: int = 0) -> int:
+        del nbytes, flags
+        n = min(len(buffer), len(self._replies))
+        buffer[:n] = self._replies[:n]
         self._replies = self._replies[n:]
         return n
+
+    def close(self) -> None:
+        pass
 
 
 def _open_reply_body(
