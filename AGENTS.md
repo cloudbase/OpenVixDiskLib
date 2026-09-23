@@ -27,8 +27,8 @@
   were stored.
 - `docs/probing_samples` contains examples of scripts that were used for
   reverse engineering purposes. The goal is to provide a better insight over
-  the reverse engineering procedure. Sanitize any sensitive information such
-  as credentials and ips.
+  the reverse engineering procedure. Those scripts, like all other committed
+  files, must follow the Sensitive information rules below.
 
 
 ## Architecture
@@ -52,6 +52,36 @@
   connect/open/close leak checks live under `tests/stress/`
   (`tox -e stress`).
 
+
+## Sensitive information
+
+Lab topology and credentials live only in gitignored `.test_config.yaml`.
+Do not copy live values from it (or from ssh, vim, tcpdump, strace, or
+sslhook output) into anything that will be committed.
+
+Sanitize before committing. This applies to `README.md` sample YAML,
+`docs/`, `docs/probing_samples/`, comments, tests, and log excerpts — not
+only probing scripts. Strip or replace:
+
+- IPs and hostnames (vCenter, ESXi, HotAdd proxy, iSCSI portal)
+- Usernames, passwords, SSH identity paths, and home directories
+  (e.g. `/home/ubuntu/...`)
+- VM / datastore names that are unique to the lab, morefs, SSL
+  thumbprints, session tokens, and NAA / WWN identifiers of lab LUNs
+- Pickle files, sslhook logs, strace dumps, and packet captures (keep
+  those under `/tmp`; they contain lab host and credentials)
+
+Use placeholders that match existing docs:
+
+- Hostnames: `vcenter.example.com`, `hotadd-proxy.example.com`
+- IPs: RFC 5737 documentation addresses (`192.0.2.0/24`) or `<vcenter>` /
+  `<esxi>`
+- ConnectEx fields and tickets: `<sanitized>` (see `vddk_san_trace.py`)
+- Sample passwords: generic `secret`, not a lab password
+
+README / `docs/*.md` YAML is a template, not a dump of `.test_config.yaml`.
+Before finishing a docs or sample-config change, grep the diff for RFC1918
+addresses, `/home/`, and values that appear in `.test_config.yaml`.
 
 ## Other rules
 
