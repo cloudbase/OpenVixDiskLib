@@ -80,6 +80,15 @@ single ESXi host can produce — ESXi's storage stack decrypts/encrypts
 transparently at the IOFilter layer for every client, with nothing
 encryption-specific in the NFC wire protocol at all.
 
+### Transports not covered
+
+Only the NBD/NFC path was tested. The `hotadd` transport most likely
+behaves the same way, since the disk is still read through the ESXi
+storage stack. The `san` transport is an open question: it reads the
+underlying LUNs (iSCSI, Fibre Channel) directly, mounts VMFS and parses
+the VMDK itself, bypassing the IOFilter layer where decryption happens,
+so it would presumably see ciphertext. Not verified.
+
 ## Validated in this lab
 
 Single-ESXi-host lab (`docs/encryption_lab_setup.md`), VM

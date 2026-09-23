@@ -1,6 +1,6 @@
 # Building a VM-encryption test lab from a bare ESXi host
 
-This project's lab is a single standalone ESXi host (no vCenter — see
+This project's lab may be a standalone ESXi host (no vCenter — see
 `docs/reverse_engineering_procedure.md`'s "Lab and artifacts"). VM/VMDK
 encryption is a vCenter-only feature: a bare ESXi host's `cryptoManager`
 is the base `vim.encryption.CryptoManagerHost`, not
@@ -199,3 +199,14 @@ Nothing here provisions a *second* ESXi host, so the "host doesn't
 already have this disk's key" scenario — cross-host vMotion/clone/
 restore of an encrypted VM — cannot be exercised. See
 `docs/encryption.md`'s "What this does not cover" for why that matters.
+
+## Running the integration test
+
+`tests/integration/test_encryption.py` reuses the vCenter settings from
+`.test_config.yaml` (see `README.md`) and needs two extra keys pointing
+at the already-encrypted VM and disk (it is skipped without them):
+
+```yaml
+encrypted_vm_moref: vm-123
+encrypted_disk_path: "[datastore0] vm/vm_1.vmdk"
+```

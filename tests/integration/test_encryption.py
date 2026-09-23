@@ -8,12 +8,14 @@ this does not use the session-scoped ``lab`` fixture: creating and
 encrypting a VM needs a vCenter with a Native Key Provider and a
 manual storage-policy assignment step (``docs/encryption_lab_setup.md``
 -- the SPBM API needed to automate the last step did not work), so this
-test instead points at a pre-existing encrypted VM/disk, configured via
-optional keys in ``.test_config.yaml``. It is skipped if those keys are
-absent.
+test instead points at a pre-existing encrypted VM/disk. It reuses the
+vCenter settings from ``.test_config.yaml`` (see ``README.md``) and needs
+two extra keys, ``encrypted_vm_moref`` and ``encrypted_disk_path``. It is
+skipped if those keys are absent.
 """
 
 import os
+from typing import Any
 
 import pytest
 import yaml
@@ -23,16 +25,10 @@ from tests.integration.base import SECTOR_SIZE, pattern_bytes
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _CONFIG_PATH = os.path.join(_REPO_ROOT, ".test_config.yaml")
-_ENCRYPTION_CONFIG_KEYS = (
-    "vcenter_host",
-    "vcenter_username",
-    "vcenter_password",
-    "encrypted_vm_moref",
-    "encrypted_disk_path",
-)
+_ENCRYPTION_CONFIG_KEYS = ("encrypted_vm_moref", "encrypted_disk_path")
 
 
-def _load_encryption_config() -> dict[str, str]:
+def _load_encryption_config() -> dict[str, Any]:
     if not os.path.isfile(_CONFIG_PATH):
         pytest.skip(f"{_CONFIG_PATH} not found; see docs/encryption_lab_setup.md")
     with open(_CONFIG_PATH, encoding="utf-8") as config_file:
@@ -44,7 +40,7 @@ def _load_encryption_config() -> dict[str, str]:
             f"missing .test_config.yaml keys: {', '.join(missing)} "
             "(see docs/encryption_lab_setup.md)"
         )
-    return {key: str(data[key]) for key in _ENCRYPTION_CONFIG_KEYS}
+    return data
 
 
 class TestEncryption:
@@ -66,15 +62,16 @@ class TestEncryption:
         write_buf[:SECTOR_SIZE] = expected
         with (
             handle.connect(
-                server_name=cfg["vcenter_host"],
+                server_name=cfg["host"],
+                port=int(cfg.get("port", 443)),
                 thumbprint=None,
-                username=cfg["vcenter_username"],
-                password=cfg["vcenter_password"],
-                vmx_spec=cfg["encrypted_vm_moref"],
+                username=cfg["username"],
+                password=cfg["password"],
+                vmx_spec=str(cfg["encrypted_vm_moref"]),
                 read_only=False,
-                allow_untrusted=True,
+                allow_untrusted=bool(cfg.get("allow_untrusted", True)),
             ) as conn,
-            handle.open(conn, cfg["encrypted_disk_path"], flags=0) as disk,
+            handle.open(conn, str(cfg["encrypted_disk_path"]), flags=0) as disk,
         ):
             handle.write(disk, 0, 1, write_buf)
 
@@ -82,17 +79,18 @@ class TestEncryption:
         read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
         with (
             handle.connect(
-                server_name=cfg["vcenter_host"],
+                server_name=cfg["host"],
+                port=int(cfg.get("port", 443)),
                 thumbprint=None,
-                username=cfg["vcenter_username"],
-                password=cfg["vcenter_password"],
-                vmx_spec=cfg["encrypted_vm_moref"],
+                username=cfg["username"],
+                password=cfg["password"],
+                vmx_spec=str(cfg["encrypted_vm_moref"]),
                 read_only=True,
-                allow_untrusted=True,
+                allow_untrusted=bool(cfg.get("allow_untrusted", True)),
             ) as conn,
             handle.open(
                 conn,
-                cfg["encrypted_disk_path"],
+                str(cfg["encrypted_disk_path"]),
                 flags=vixdisklib.VIXDISKLIB_FLAG_OPEN_READ_ONLY,
             ) as disk,
         ):
