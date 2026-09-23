@@ -57,9 +57,9 @@ VDDK logs this as `Connected to VIM Server` / `Authenticating user` /
 `Logged in!`. OpenVixDiskLib keeps that `ServiceInstance` and
 its stub for the ticket call.
 
-Direct ESXi login is the same SOAP login against hostd, but the NFC
-moref and service name differ (`ha-nfc` instead of `nfcService` /
-`vpxa-nfc`). The lab path is vCenter-mediated.
+Direct ESXi login is the same SOAP login, this time against hostd
+instead of vCenter. The NFC moref and service/PROXY name differ; see
+"Direct ESXi (no vCenter)" below for the verified values.
 
 ## Stage 2: NFC ticket
 
@@ -253,6 +253,90 @@ are for local ESXi credentials. With a vCenter ticket:
 argument is not what VDDK sends. The SHA-1 value is for verifying the
 TLS certificate, not for the `THUMBPRINT_SHA2` command.
 
+## Direct ESXi (no vCenter)
+
+Captured against a standalone ESXi 8.0.3 host (`apiType: HostAgent`,
+no vCenter in the picture at all) with the same SSL-hook technique
+from `docs/ssl_hook.md`, using real VDDK 8.0.3 pointed straight at the
+host (`vmxSpec=moref=<N>`, `serverName=<esxi-ip>`). This corrects an
+earlier guess in this file that assumed the moref would be `ha-nfc`.
+
+Differences from the vCenter-mediated path above:
+
+| Item                            | vCenter-mediated       | Direct ESXi (verified)     |
+| ------------------------------- | ---------------------- | -------------------------- |
+| `NfcService` moref              | `nfcService`           | `ha-nfc-service`           |
+| `NfcGetVmFilesResponse.service` | `vpxa-nfc`             | `nfc`                      |
+| `NfcGetVmFilesResponse.host`    | present (ESXi address) | **absent** (omitted field) |
+| authd `PROXY` line              | `PROXY vpxa-nfc`       | `PROXY nfc`                |
+| authd success line              | `200 Connect ha-nfc`   | `200 Connect ha-nfc`       |
+
+The `NfcGetVmFiles` SOAP call itself is unchanged (`vm` argument only);
+only the `_this` moref and the response fields differ:
+
+```xml
+<NfcGetVmFiles xmlns="urn:vim25">
+  <_this type="NfcService">ha-nfc-service</_this>
+  <vm type="VirtualMachine">1</vm>
+</NfcGetVmFiles>
+```
+
+```xml
+<NfcGetVmFilesResponse xmlns="urn:vim25">
+  <returnval>
+    <port>902</port>
+    <sslThumbprint>...</sslThumbprint>
+    <service>nfc</service>
+    <serviceVersion>1.1</serviceVersion>
+    <sessionId>...</sessionId>
+  </returnval>
+</NfcGetVmFilesResponse>
+```
+
+Since `host` is absent, the client must already know where to dial
+authd: the same ESXi host it just logged into over VIM. A vCenter
+ticket always fills `host` because that ESXi address is not otherwise
+known to the client.
+
+### Finding the `ha-nfc-service` moref
+
+VDDK does not hardcode this moref either. Before the `NfcGetVmFiles`
+call, it issues an undocumented `RetrieveInternalContent` call on the
+same `ServiceInstance` moref used for the public
+`RetrieveServiceContent`:
+
+```xml
+<RetrieveInternalContent xmlns="urn:vim25">
+  <_this type="ServiceInstance">ServiceInstance</_this>
+</RetrieveInternalContent>
+```
+
+The response carries ~20 undocumented managed-object refs
+(`agentManager`, `llProvisioningManager`, `diskManager`,
+`nfcService`, `proxyService`, ...); only `nfcService` matters here.
+Its value was `nfcService` in the earlier vCenter capture and
+`ha-nfc-service` on this bare ESXi host — VDDK reads it from this
+response rather than assuming either name.
+
+### OpenVixDiskLib fix
+
+`openvixdisklib/nfc_auth.py` previously hardcoded
+`NFC_SERVICE_MOID = "nfcService"`, which fails outright against a bare
+ESXi host with `vmodl.fault.ManagedObjectNotFound`. It now resolves
+the moref the same way VDDK does: `_nfc_service_moid()` issues the
+`RetrieveInternalContent` SOAP call as raw XML over the existing
+authenticated stub connection (registering pyVmomi types for the full
+undocumented response schema wasn't worth it for one field) and
+regex-extracts `nfcService` from the reply.
+
+`connect_authd()` also gained a `fallback_host` parameter: when
+`ticket.host` is unset (the direct-ESXi case above), it dials the VIM
+connection's own host instead. `openvixdisklib.py` passes
+`conn.si._stub.host` for this.
+
+Validated end-to-end (`ConnectEx` + `Open` + `Read`, both `nbd` and
+`nbdssl` transports) against a live standalone ESXi 8.0.3 host.
+
 ## OpenVixDiskLib
 
 | Piece                | Module                                   | Reuses pyVmomi?                    |
@@ -273,10 +357,13 @@ Run:
 
 ```bash
 .venv/bin/pytest tests/integration/test_nfc_auth.py
+.venv/bin/pytest tests/integration/test_direct_esxi.py
 ```
 
-The test completes VIM login and the authd handshake (`200 Connect`)
-and asserts an established TLS socket on `ticket.host:ticket.port`.
+`test_nfc_auth.py` completes VIM login and the authd handshake against
+vCenter. `test_direct_esxi.py` picks the lab VM's ESXi host from
+inventory and repeats ConnectEx / Open / Read on hostd, where the
+ticket omits `host` and NfcService is `ha-nfc-service`.
 
 ## What comes after authentication
 
