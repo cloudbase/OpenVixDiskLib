@@ -155,7 +155,8 @@ def _nfc_service_moid(si: vim.ServiceInstance) -> str:
     match = _NFC_SERVICE_MOID_RE.search(body)
     if response.status != 200 or not match:
         raise RuntimeError(
-            f"RetrieveInternalContent (status {response.status}) had no nfcService moref"
+            f"RetrieveInternalContent (status {response.status}) "
+            "had no nfcService moref"
         )
     return match.group(1)
 
