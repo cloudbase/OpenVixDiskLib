@@ -27,8 +27,6 @@ class _FakeSocket:
         return n
 
 
-
-
 def _open_reply_body(
     handle: int = 0x1234,
     file_type: int = nfc_open.NFC_DISK,
@@ -48,23 +46,24 @@ def _open_reply_body(
     return bytes(body)
 
 
-
-
 def _ddb_get_reply(op_id: int, value: bytes | None) -> bytes:
     """Build a scripted DDB_GET reply: header + 16-byte body + value extra."""
     value_length = len(value) if value is not None else 0
     body = bytes(12) + struct.pack("<I", value_length)
-    return nfc_open._pack_aio_hdr(nfc_open.NFC_AIO_MSG_DDB_GET, 16, op_id) + body + (
-        value or b""
+    return (
+        nfc_open._pack_aio_hdr(nfc_open.NFC_AIO_MSG_DDB_GET, 16, op_id)
+        + body
+        + (value or b"")
     )
-
-
 
 
 class TestDdbGet:
     def _disk(self, replies: bytes) -> nfc_open.NfcDisk:
         return nfc_open.NfcDisk(
-            sock=_FakeSocket(replies), path="[ds] a.vmdk", handle=0x1234, sector_size=512
+            sock=_FakeSocket(replies),
+            path="[ds] a.vmdk",
+            handle=0x1234,
+            sector_size=512,
         )
 
     def test_found_key_returns_decoded_value(self) -> None:
@@ -88,8 +87,6 @@ class TestDdbGet:
         assert key_len == len("geometry.sectors")
         assert reserved == 0
         assert sent[16 + 16 :] == b"geometry.sectors"
-
-
 
 
 class TestQueryFullInfo:
@@ -127,8 +124,12 @@ class TestQueryFullInfo:
         )
         info = disk.query_full_info()
         assert info.capacity_sectors == 1024
-        assert info.phys_geo == nfc_open.DiskGeometry(cylinders=10, heads=20, sectors=30)
-        assert info.bios_geo == nfc_open.DiskGeometry(cylinders=100, heads=200, sectors=63)
+        assert info.phys_geo == nfc_open.DiskGeometry(
+            cylinders=10, heads=20, sectors=30
+        )
+        assert info.bios_geo == nfc_open.DiskGeometry(
+            cylinders=100, heads=200, sectors=63
+        )
         assert info.adapter_type == "lsilogic"
         assert info.uuid == "some-uuid"
 
@@ -138,8 +139,6 @@ class TestQueryFullInfo:
         assert info.bios_geo == nfc_open.DiskGeometry(cylinders=0, heads=0, sectors=0)
         assert info.adapter_type is None
         assert info.uuid is None
-
-
 
 
 class TestParseOpenReply:
