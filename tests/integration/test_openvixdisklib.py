@@ -228,7 +228,12 @@ class TestOpenvixdisklib:
         read_buf = vixdisklib.get_buffer(SECTOR_SIZE)
 
         si = _connect_vim(
-            lab.host, lab.username, lab.password, lab.port, lab.thumbprint, lab.allow_untrusted
+            lab.host,
+            lab.username,
+            lab.password,
+            lab.port,
+            lab.thumbprint,
+            lab.allow_untrusted,
         )
         try:
             vm = vim.VirtualMachine(lab.vm_moref, si._stub)
@@ -253,13 +258,17 @@ class TestOpenvixdisklib:
 
                 blocks = handle.query_allocated_blocks(
                     disk,
-                    start_sector=(write_sector // chunk_size_sectors) * chunk_size_sectors,
+                    start_sector=(write_sector // chunk_size_sectors)
+                    * chunk_size_sectors,
                     num_sectors=chunk_size_sectors,
                     chunk_size_sectors=chunk_size_sectors,
                 )
                 assert any(
                     b.offset <= write_sector < b.offset + b.length for b in blocks
-                ), f"written sector {write_sector} on delta file not covered by {blocks}"
+                ), (
+                    f"written sector {write_sector} "
+                    f"on delta file not covered by {blocks}"
+                )
         finally:
             try:
                 vm = vim.VirtualMachine(lab.vm_moref, si._stub)

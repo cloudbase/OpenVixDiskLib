@@ -3,8 +3,6 @@
 
 """Unit tests for the OPEN_FILE reply parsing in ``nfc_open``."""
 
-import struct
-
 import pytest
 
 from openvixdisklib import nfc_open
@@ -49,11 +47,11 @@ class TestDecodeAllocatedBitmap:
         assert blocks == (nfc_open.AllocatedBlock(offset=0, length=256),)
 
 
-
-
 class TestQueryAllocatedBlocksValidation:
     def _disk(self) -> nfc_open.NfcDisk:
-        return nfc_open.NfcDisk(sock=None, path="[ds] a.vmdk", handle=1, sector_size=512)
+        return nfc_open.NfcDisk(
+            sock=None, path="[ds] a.vmdk", handle=1, sector_size=512
+        )
 
     def test_num_sectors_not_a_multiple_raises(self) -> None:
         with pytest.raises(ValueError, match="num_sectors must be a multiple"):
@@ -62,5 +60,3 @@ class TestQueryAllocatedBlocksValidation:
     def test_start_sector_not_a_multiple_raises(self) -> None:
         with pytest.raises(ValueError, match="start_sector must be a multiple"):
             self._disk().query_allocated_blocks(100, 128, chunk_size_sectors=128)
-
-

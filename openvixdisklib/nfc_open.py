@@ -536,7 +536,9 @@ class NfcDisk:
         num_sectors: int,
         chunk_size_sectors: int = NFC_QUERY_ALLOCATED_BLOCKS_CHUNK_SECTORS,
     ) -> tuple[AllocatedBlock, ...]:
-        """Return allocated (non-sparse) runs. Matches ``VixDiskLib_QueryAllocatedBlocks``.
+        """Return allocated (non-sparse) runs.
+
+        Matches ``VixDiskLib_QueryAllocatedBlocks``.
 
         Captured from VDDK: a 48-byte request::
 
