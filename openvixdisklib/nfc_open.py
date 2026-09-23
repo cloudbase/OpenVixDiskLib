@@ -26,6 +26,7 @@ import socket
 import ssl
 import struct
 from dataclasses import dataclass
+from typing import Protocol
 
 from openvixdisklib import fastlz
 from openvixdisklib.nfc_auth import NfcAuthSession, _ssl_client_context
@@ -184,18 +185,31 @@ def wrap_nfcssl_socket(ssock: ssl.SSLSocket, server_hostname: str) -> ssl.SSLSoc
         raise
 
 
+class NfcTransport(Protocol):
+    """Byte pipe used after the NFC handshake (TCP, TLS, or a test fake)."""
+
+    def sendall(self, data: bytes) -> None:
+        """Send ``data`` in full."""
+
+    def recv_into(self, buffer: memoryview, nbytes: int = 0, flags: int = 0) -> int:
+        """Read into ``buffer`` and return the number of bytes stored."""
+
+    def close(self) -> None:
+        """Close the underlying connection."""
+
+
 def _enable_tcp_nodelay(sock: socket.socket) -> None:
     """Disable Nagle so a small AIO header is not held back from its extra."""
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 
-def _recvn(sock: socket.socket, size: int) -> bytes:
+def _recvn(sock: NfcTransport, size: int) -> bytes:
     buf = bytearray(size)
     _recvn_into(sock, memoryview(buf))
     return bytes(buf)
 
 
-def _recvn_into(sock: socket.socket, buf: memoryview) -> None:
+def _recvn_into(sock: NfcTransport, buf: memoryview) -> None:
     """Read exactly ``len(buf)`` bytes into ``buf``."""
     view = buf.cast("B") if buf.format != "B" else buf
     filled = 0
@@ -234,7 +248,7 @@ def _aio_extra_len(ctype: int, body: bytes, chunk_len: int) -> int:
     raise NfcProtocolError(f"unsupported NFC IO compression type {ctype}")
 
 
-def _send_nfc_msg(sock: socket.socket, msg_type: int, body: bytes = b"") -> None:
+def _send_nfc_msg(sock: NfcTransport, msg_type: int, body: bytes = b"") -> None:
     if len(body) > NFC_MSG_SIZE - 4:
         raise ValueError("NFC classic message body too large")
     frame = struct.pack("<I", msg_type) + body
@@ -267,7 +281,7 @@ class NfcDisk:
 
     def __init__(
         self,
-        sock: socket.socket,
+        sock: NfcTransport,
         path: str,
         handle: int,
         sector_size: int,

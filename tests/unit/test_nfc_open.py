@@ -8,6 +8,27 @@ import pytest
 from openvixdisklib import nfc_open
 
 
+class _FakeSocket:
+    """A minimal socket stand-in that replays scripted bytes for recv_into."""
+
+    def __init__(self, replies: bytes = b"") -> None:
+        self._replies = replies
+        self.sent: list[bytes] = []
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(bytes(data))
+
+    def recv_into(self, buffer: memoryview, nbytes: int = 0, flags: int = 0) -> int:
+        del nbytes, flags
+        n = min(len(buffer), len(self._replies))
+        buffer[:n] = self._replies[:n]
+        self._replies = self._replies[n:]
+        return n
+
+    def close(self) -> None:
+        pass
+
+
 class TestDecodeAllocatedBitmap:
     def test_merges_contiguous_runs(self) -> None:
         """Contiguous set bits become one run; gaps split into separate ones."""
@@ -50,7 +71,7 @@ class TestDecodeAllocatedBitmap:
 class TestQueryAllocatedBlocksValidation:
     def _disk(self) -> nfc_open.NfcDisk:
         return nfc_open.NfcDisk(
-            sock=None, path="[ds] a.vmdk", handle=1, sector_size=512
+            sock=_FakeSocket(), path="[ds] a.vmdk", handle=1, sector_size=512
         )
 
     def test_num_sectors_not_a_multiple_raises(self) -> None:
