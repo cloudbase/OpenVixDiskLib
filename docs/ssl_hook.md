@@ -143,3 +143,15 @@ skipped.
   that is done offline on the hex log.
 - It must not ship in OpenVixDiskLib. Keep it out of
   the library path used by `openvixdisklib/nfc_auth.py`.
+- `ctypes.CDLL` on `libvixDiskLib.so` **in the same process as
+  pyVmomi** can segfault, at least on this lab's Python/glibc build:
+  VDDK's bundled OpenSSL and the system OpenSSL pyVmomi already loaded
+  (for its own HTTPS) collide. Symptom: `Segmentation fault (core
+  dumped)`, no Python traceback. Split into two separate processes
+  instead — one doing pyVmomi/setup work, one doing only
+  `ctypes.CDLL`/native VDDK calls, handing data between them via a
+  file (see `docs/reverse_engineering_procedure.md`'s note on
+  `NFC_DELTA_DISK` for an example). This is the same underlying
+  conflict as `tests/integration/test_vddk.py` /
+  `test_crosscheck.py` needing `tox -e integration`'s isolated
+  subprocess env rather than running inside the main pytest process.

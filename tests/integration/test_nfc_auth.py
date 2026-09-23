@@ -11,7 +11,11 @@ class TestNfcAuth:
         """Complete VIM login and authd PROXY through ``200 Connect``."""
         with lab.authenticate() as session:
             ticket = session.ticket
-            assert ticket.host
+            # ticket.host is unset on a direct-ESXi ticket (no vCenter):
+            # the authd endpoint is implicitly the host already logged
+            # into. connect_authd() falls back to that host, so the
+            # socket's peer address is the reliable check here.
+            assert session.authd_sock.getpeername()[0]
             assert ticket.port
             assert ticket.sessionId
             assert session.nfc_ssl is True
