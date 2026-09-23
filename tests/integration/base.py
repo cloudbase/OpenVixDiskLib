@@ -162,6 +162,124 @@ def _connect_vim(
     )
 
 
+def _esxi_direct_credentials(vc_password: str) -> tuple[str, str]:
+    """Return ESXi hostd credentials for direct-connect tests.
+
+    Optional ``esxi.username`` / ``esxi.password`` in ``.test_config.yaml``
+    override the defaults (``root`` and the vCenter password).
+    """
+    if not os.path.isfile(_CONFIG_PATH):
+        return "root", vc_password
+    with open(_CONFIG_PATH, encoding="utf-8") as config_file:
+        data = yaml.safe_load(config_file) or {}
+    section = data.get("esxi")
+    if not isinstance(section, dict):
+        section = {}
+    username = str(section["username"]) if section.get("username") else "root"
+    password = str(section["password"]) if section.get("password") else vc_password
+    return username, password
+
+
+def _host_management_ip(host: vim.HostSystem) -> str:
+    vnics = list(host.config.network.vnic or [])
+    for vnic in vnics:
+        ip = vnic.spec.ip.ipAddress if vnic.spec.ip else None
+        if ip and vnic.device == "vmk0":
+            return str(ip)
+    for vnic in vnics:
+        ip = vnic.spec.ip.ipAddress if vnic.spec.ip else None
+        if ip:
+            return str(ip)
+    if host.name:
+        return str(host.name)
+    raise RuntimeError(f"no management IPv4 on host {host._moId}")
+
+
+def resolve_direct_esxi_lab(lab: LabEnv) -> LabEnv:
+    """Return a ``LabEnv`` that talks to the lab VM's ESXi host, not vCenter.
+
+    The host is the one ``lab``'s VM is registered on. Hostd credentials
+    default to ``root`` plus the vCenter password. Tests should skip when
+    lockdown is on or hostd login fails.
+    """
+    si = _connect_vim(
+        lab.host,
+        lab.username,
+        lab.password,
+        lab.port,
+        lab.thumbprint,
+        lab.allow_untrusted,
+    )
+    esxi_host = ""
+    instance_uuid = ""
+    try:
+        if si.content.about.apiType == "HostAgent":
+            return lab
+        vm = vim.VirtualMachine(lab.vm_moref, si._stub)
+        host = vm.runtime.host
+        lockdown = str(getattr(host.config, "lockdownMode", "") or "")
+        if lockdown and not lockdown.endswith("lockdownDisabled"):
+            pytest.skip(f"ESXi {host.name} is in lockdown ({lockdown})")
+        esxi_host = _host_management_ip(host)
+        instance_uuid = vm.config.instanceUuid
+        if not instance_uuid:
+            pytest.skip(f"lab VM {lab.vm_moref} has no instanceUuid")
+    finally:
+        Disconnect(si)
+
+    username, password = _esxi_direct_credentials(lab.password)
+    try:
+        thumbprint = nfc_auth.get_ssl_cert_thumbprint(esxi_host, lab.port)
+    except OSError as exc:
+        pytest.skip(f"cannot reach ESXi {esxi_host}: {exc}")
+    try:
+        esxi_si = _connect_vim(
+            esxi_host,
+            username,
+            password,
+            lab.port,
+            thumbprint,
+            lab.allow_untrusted,
+        )
+    except vim.fault.InvalidLogin:
+        pytest.skip(
+            f"direct ESXi login to {esxi_host} failed; set esxi.username / "
+            "esxi.password in .test_config.yaml"
+        )
+    except vim.fault.NoPermission:
+        pytest.skip(
+            f"ESXi user has no hostd privileges on {esxi_host}; set "
+            "esxi.username / esxi.password in .test_config.yaml"
+        )
+    except OSError as exc:
+        pytest.skip(f"cannot connect to ESXi {esxi_host}: {exc}")
+    try:
+        if esxi_si.content.about.apiType != "HostAgent":
+            pytest.skip(
+                f"{esxi_host} apiType is {esxi_si.content.about.apiType}, not HostAgent"
+            )
+        found = esxi_si.content.searchIndex.FindByUuid(None, instance_uuid, True, True)
+        if found is None:
+            pytest.skip(
+                f"lab VM instanceUuid {instance_uuid} not found on ESXi {esxi_host}"
+            )
+        return LabEnv(
+            host=esxi_host,
+            port=lab.port,
+            username=username,
+            password=password,
+            allow_untrusted=lab.allow_untrusted,
+            datacenter=lab.datacenter,
+            datastore=lab.datastore,
+            thumbprint=thumbprint,
+            vm_moref=found._moId,
+            vmx_spec=f"moref={found._moId}",
+            disk_path=lab.disk_path,
+        )
+    finally:
+        Disconnect(esxi_si)
+
+
 def _wait_for_task(task: vim.Task) -> Any:
     deadline = time.monotonic() + _TASK_TIMEOUT_S
     while task.info.state in (vim.TaskInfo.State.running, vim.TaskInfo.State.queued):

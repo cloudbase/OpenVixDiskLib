@@ -357,10 +357,13 @@ Run:
 
 ```bash
 .venv/bin/pytest tests/integration/test_nfc_auth.py
+.venv/bin/pytest tests/integration/test_direct_esxi.py
 ```
 
-The test completes VIM login and the authd handshake (`200 Connect`)
-and asserts an established TLS socket on `ticket.host:ticket.port`.
+`test_nfc_auth.py` completes VIM login and the authd handshake against
+vCenter. `test_direct_esxi.py` picks the lab VM's ESXi host from
+inventory and repeats ConnectEx / Open / Read on hostd, where the
+ticket omits `host` and NfcService is `ha-nfc-service`.
 
 ## What comes after authentication
 

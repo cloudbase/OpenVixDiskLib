@@ -96,11 +96,17 @@ password: secret
 allow_untrusted: true
 datacenter: Datacenter
 datastore: datastore0
+esxi:
+  username: root
+  password: secret
 ```
 
 A session-scoped pytest fixture creates an empty VM with a 10 GiB thin
 disk on that datastore and tears it down when the session ends. Tests
-write known patterns and read them back.
+write known patterns and read them back. Direct-ESXi tests pick the lab
+VM's host from vCenter and log into hostd (default ``root`` and the
+vCenter password) so NFC uses ``ha-nfc-service`` instead of
+``nfcService``. They skip when lockdown is on or hostd login fails.
 
 ```bash
 tox -e integration
