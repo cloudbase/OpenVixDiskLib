@@ -24,10 +24,13 @@ Implemented against vCenter 8 / ESXi 8. Default transport is `nbdssl`
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
 - `VixDiskLib_Read` (optional ``skip_decompression`` packs FastLZ extras)
 - `VixDiskLib_Write`
+- `VixDiskLib_GetInfo` (capacity and physical geometry from the `Open`
+  reply; `biosGeo`/`adapterType`/`uuid` from `DDB_GET`, matching real
+  VDDK's cost and behavior)
 
 Not implemented: compression open flags other than FastLZ, CBT /
-allocated-block queries, disk geometry (`DDB_GET`), encrypted disks,
-and direct ESXi `ha-nfc` without vCenter `vpxa-nfc`.
+allocated-block queries, encrypted disks, and direct ESXi `ha-nfc`
+without vCenter `vpxa-nfc`.
 
 Requires Python 3.10 or later.
 

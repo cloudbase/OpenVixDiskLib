@@ -8,8 +8,9 @@ This file is the **sequence of steps**, including dead ends, so later
 NFC work can follow the same loop instead of rediscovering it.
 
 Scope so far: `VixDiskLib_ConnectEx` + `VixDiskLib_Open` +
-`VixDiskLib_Read` + `VixDiskLib_Write` against lab vCenter 8.0.1 /
-ESXi 8, transports `nbd` and `nbdssl`. Validation method:
+`VixDiskLib_Read` + `VixDiskLib_Write` + `VixDiskLib_GetInfo` against
+lab vCenter 8.0.1 / ESXi 8, transports `nbd` and `nbdssl`. Validation
+method:
 `tests/integration/` (the session-scoped `lab` fixture creates a temporary
 empty VM with a 10 GiB disk and destroys it when the pytest session ends).
 
@@ -381,8 +382,58 @@ not an OPEN_FILE bit. Capture VDDK with that flag (NBD + the port-902
 Replay: pip `pyfastlz` via `openvixdisklib/fastlz.py` (NFC extra is
 raw FastLZ, without the wrapper's 4-byte length prefix) plus `NfcDisk`
 compression on each IO. Proof:
-`tests/integration/test_nfc_read_write.py` (`fastlz`) and
-`tests/perf/test_compare.py`.
+## Step 14 — `VixDiskLib_GetInfo` capacity
+
+Extended the ctypes probe from Step 13 to call `VixDiskLib_GetInfo`
+after `Open`, under the SSL hook plus a `write`/`read` interceptor on
+fd 902 (Step 7), to see what wire traffic `GetInfo` adds.
+
+Result: **no new SOAP or authd traffic** — the same `RetrieveContent`
++ `Login` + `NfcGetVmFiles` + authd sequence as a plain `Open`. All the
+extra traffic is inside the already-open NFC/AIO session: ~20 more
+`DDB_GET` (type 11) requests right after `OPEN_FILE`, for keys like
+`adapterType`, `uuid`, `geometry.cylinders`, `geometry.biosCylinders`,
+etc. (full list in `docs/nfc_open.md`).
+
+Dumping every byte of the `OPEN_FILE` reply (not just the fields the
+earlier Open-only capture had labeled) found `capacity` (offset 28,
+`uint64` bytes) and `physGeo` (offsets 40/44/48) already present —
+verified they match `VixDiskLibInfo.capacity`/`physGeo` from the same
+`GetInfo` call exactly. Only `biosGeo`, `adapterType`, and `uuid` are
+genuinely `DDB_GET`-only; `biosGeo` came back "key not found" (zeros)
+on this unencrypted lab disk.
+
+Fix: extended `_parse_open_reply` in `openvixdisklib/nfc_open.py` to
+also read those offsets, added `nfc_open.DiskInfo`/`DiskGeometry`, and
+exposed `VixDiskLibHandle.get_info()`. No new NFC message type was
+needed — `DDB_GET` (`adapterType`/`uuid`/`biosGeo`) is still open work.
+Validated against the live host: `capacity_sectors=33554432`
+(16 GiB), `phys_geo=(2088, 255, 63)`, matching native VDDK's
+`GetInfo` on the same disk.
+
+
+## Step 16 — `DDB_GET` (AIO type 11)
+
+Already partly captured as a side effect of Step 14 (`VixDiskLib_GetInfo`
+triggers ~28 `DDB_GET` calls); no new capture was needed, just decoding
+the request/reply pairs from that saved log by matching `opId` across
+both directions. Confirmed the request's first 8 bytes equal the
+`OPEN_FILE` handle from the same capture, and that a "found" reply's
+extra is plain ASCII text (`b"lsilogic"`, `b"2088"`, ...), not binary —
+matching how a VMDK descriptor's DDB section stores key/value pairs as
+text. No padding on the reply extra (unlike Step 15's bitmap),
+confirmed by decoding all 28 request/reply pairs from one capture in
+sequence without desync.
+
+Implemented as `NfcDisk.ddb_get(key) -> str | None` and
+`NfcDisk.query_full_info() -> DiskInfo` (the 5 keys needed for
+`bios_geo`/`adapter_type`/`uuid`), wired into
+`VixDiskLibHandle.get_info` in place of the OPEN_FILE-only version
+from Step 14 — `get_info` now matches real VDDK's `VixDiskLib_GetInfo`
+completely, including paying the same round-trip cost. Full layout:
+`docs/nfc_open.md`. Validated against the live ESXi lab: matches
+native VDDK's `GetInfo` output on the same disk exactly.
+
 
 ## What to write down
 
@@ -404,8 +455,7 @@ OpenVixDiskLib.
 
 Not yet reversed, same loop as above:
 
-- `DDB_GET` / disk geometry, zlib/skipz compression, encrypted disks
+- zlib/skipz compression, encrypted disks
 - `NFC_DELTA_DISK`, CBT / `QueryAllocatedBlocks`
-- `VixDiskLib_GetInfo` capacity
 - Host-switch AIO messages
 - Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
