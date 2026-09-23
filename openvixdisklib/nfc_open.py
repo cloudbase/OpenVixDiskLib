@@ -691,6 +691,9 @@ def _decode_allocated_bitmap(
     blocks = []
     run_start = None
     for chunk_idx in range(chunk_count):
+        # One bit per chunk, LSB-first: byte = chunk_idx // 8, bit =
+        # chunk_idx % 8. Shift that bit to position 0 and keep it with & 1
+        # (1 = allocated, 0 = hole). Chunk 10 is bit 2 of bitmap[1].
         allocated = (bitmap[chunk_idx // 8] >> (chunk_idx % 8)) & 1
         if allocated and run_start is None:
             run_start = chunk_idx
