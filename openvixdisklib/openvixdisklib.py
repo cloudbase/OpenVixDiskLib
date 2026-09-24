@@ -28,6 +28,9 @@ from openvixdisklib import nfc_auth, nfc_open
 
 ReadResult = nfc_open.ReadResult
 ReadFragment = nfc_open.ReadFragment
+DiskInfo = nfc_open.DiskInfo
+DiskGeometry = nfc_open.DiskGeometry
+AllocatedBlock = nfc_open.AllocatedBlock
 
 LOG = logging.getLogger(__name__)
 
@@ -56,8 +59,12 @@ def _nfc_compression(flags: int) -> int:
     )
     if alg == 0:
         return nfc_open.NFC_COMPRESSION_NONE
+    if alg == VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB:
+        return nfc_open.NFC_COMPRESSION_ZLIB
     if alg == VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ:
         return nfc_open.NFC_COMPRESSION_FASTLZ
+    if alg == VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ:
+        return nfc_open.NFC_COMPRESSION_SKIPZ
     if alg & (alg - 1):
         raise NotImplementedError(
             "Cannot set two or more NBD compression algorithms at the same time"
@@ -283,8 +290,9 @@ class VixDiskLibHandle:
             disk_path: Datastore path of the VMDK.
             flags: Open flags. ``VIXDISKLIB_FLAG_OPEN_READ_ONLY`` opens
                 the disk read-only; omit it for write.
-                ``VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ`` compresses
-                NFC IO. zlib and skipz are not implemented.
+                ``VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB``,
+                ``_FASTLZ``, and ``_SKIPZ`` each compress NFC IO with
+                their respective algorithm; at most one may be set.
             aio_buffer_size: NFC AIO extra size in bytes, advertised in
                 OPEN_SESSION. Default 64 KiB. ESXi 8 accepts 2 MiB
                 (``2097152``) and rejects 16 MiB and 32 MiB. This is an
@@ -305,7 +313,10 @@ class VixDiskLibHandle:
             conn.si, vm, read_only=read_only, disk_path=None if read_only else disk_path
         )
         authd_sock = nfc_auth.connect_authd(
-            ticket, allow_untrusted=conn.allow_untrusted, nfc_ssl=nfc_ssl
+            ticket,
+            allow_untrusted=conn.allow_untrusted,
+            nfc_ssl=nfc_ssl,
+            fallback_host=conn.si._stub.host.rsplit(":", 1)[0],
         )
         session = nfc_auth.NfcAuthSession(conn.si, ticket, authd_sock, nfc_ssl=nfc_ssl)
         try:
@@ -325,6 +336,37 @@ class VixDiskLibHandle:
             yield handle
         finally:
             self.close(handle)
+
+    def get_info(self, disk_handle: _DiskHandle) -> nfc_open.DiskInfo:
+        """Return disk info. Matches ``VixDiskLib_GetInfo``.
+
+        ``capacity_sectors``/``phys_geo`` are free (already in the
+        ``OPEN_FILE`` reply from ``open()``); ``bios_geo``/
+        ``adapter_type``/``uuid`` cost 5 ``DDB_GET`` round trips, same
+        as real VDDK pays on every ``GetInfo`` call. See
+        ``docs/nfc_open.md``.
+        """
+        return disk_handle.disk.query_full_info()
+
+    def query_allocated_blocks(
+        self,
+        disk_handle: _DiskHandle,
+        start_sector: int,
+        num_sectors: int,
+        chunk_size_sectors: int = nfc_open.NFC_QUERY_ALLOCATED_BLOCKS_CHUNK_SECTORS,
+    ) -> tuple[nfc_open.AllocatedBlock, ...]:
+        """Return allocated runs. Matches ``VixDiskLib_QueryAllocatedBlocks``.
+
+        Args:
+            disk_handle: Handle from ``open()``.
+            start_sector: Sector offset from the start of the disk.
+            num_sectors: Number of sectors to query; must be a multiple
+                of ``chunk_size_sectors``.
+            chunk_size_sectors: Minimum run granularity, in sectors.
+        """
+        return disk_handle.disk.query_allocated_blocks(
+            start_sector, num_sectors, chunk_size_sectors
+        )
 
     def read(
         self,
