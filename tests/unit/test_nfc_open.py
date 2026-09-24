@@ -13,18 +13,22 @@ from openvixdisklib import nfc_open
 class _FakeSocket:
     """A minimal socket stand-in that replays scripted bytes for recv_into."""
 
-    def __init__(self, replies: bytes) -> None:
+    def __init__(self, replies: bytes = b"") -> None:
         self._replies = replies
         self.sent: list[bytes] = []
 
     def sendall(self, data: bytes) -> None:
         self.sent.append(bytes(data))
 
-    def recv_into(self, buf: memoryview) -> int:
-        n = min(len(buf), len(self._replies))
-        buf[:n] = self._replies[:n]
+    def recv_into(self, buffer: memoryview, nbytes: int = 0, flags: int = 0) -> int:
+        del nbytes, flags
+        n = min(len(buffer), len(self._replies))
+        buffer[:n] = self._replies[:n]
         self._replies = self._replies[n:]
         return n
+
+    def close(self) -> None:
+        pass
 
 
 def _open_reply_body(
@@ -87,7 +91,9 @@ class TestDecodeAllocatedBitmap:
 
 class TestQueryAllocatedBlocksValidation:
     def _disk(self) -> nfc_open.NfcDisk:
-        return nfc_open.NfcDisk(sock=None, path="[ds] a.vmdk", handle=1, sector_size=512)
+        return nfc_open.NfcDisk(
+            sock=_FakeSocket(), path="[ds] a.vmdk", handle=1, sector_size=512
+        )
 
     def test_num_sectors_not_a_multiple_raises(self) -> None:
         with pytest.raises(ValueError, match="num_sectors must be a multiple"):
@@ -102,15 +108,20 @@ def _ddb_get_reply(op_id: int, value: bytes | None) -> bytes:
     """Build a scripted DDB_GET reply: header + 16-byte body + value extra."""
     value_length = len(value) if value is not None else 0
     body = bytes(12) + struct.pack("<I", value_length)
-    return nfc_open._pack_aio_hdr(nfc_open.NFC_AIO_MSG_DDB_GET, 16, op_id) + body + (
-        value or b""
+    return (
+        nfc_open._pack_aio_hdr(nfc_open.NFC_AIO_MSG_DDB_GET, 16, op_id)
+        + body
+        + (value or b"")
     )
 
 
 class TestDdbGet:
     def _disk(self, replies: bytes) -> nfc_open.NfcDisk:
         return nfc_open.NfcDisk(
-            sock=_FakeSocket(replies), path="[ds] a.vmdk", handle=0x1234, sector_size=512
+            sock=_FakeSocket(replies),
+            path="[ds] a.vmdk",
+            handle=0x1234,
+            sector_size=512,
         )
 
     def test_found_key_returns_decoded_value(self) -> None:
@@ -171,8 +182,12 @@ class TestQueryFullInfo:
         )
         info = disk.query_full_info()
         assert info.capacity_sectors == 1024
-        assert info.phys_geo == nfc_open.DiskGeometry(cylinders=10, heads=20, sectors=30)
-        assert info.bios_geo == nfc_open.DiskGeometry(cylinders=100, heads=200, sectors=63)
+        assert info.phys_geo == nfc_open.DiskGeometry(
+            cylinders=10, heads=20, sectors=30
+        )
+        assert info.bios_geo == nfc_open.DiskGeometry(
+            cylinders=100, heads=200, sectors=63
+        )
         assert info.adapter_type == "lsilogic"
         assert info.uuid == "some-uuid"
 

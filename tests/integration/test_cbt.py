@@ -13,7 +13,13 @@ from pyVmomi import vim
 
 from openvixdisklib import nfc_auth
 from openvixdisklib import openvixdisklib as vixdisklib
-from tests.integration.base import SECTOR_SIZE, LabEnv, _connect_vim, _wait_for_task, pattern_bytes
+from tests.integration.base import (
+    SECTOR_SIZE,
+    LabEnv,
+    _connect_vim,
+    _wait_for_task,
+    pattern_bytes,
+)
 
 
 def _disk_device(vm: vim.VirtualMachine) -> vim.vm.device.VirtualDisk:
@@ -33,7 +39,12 @@ class TestCbt:
     def test_full_cbt_cycle(self, lab: LabEnv) -> None:
         """Enable CBT, write a known sector, and see it in a changed-areas query."""
         si = _connect_vim(
-            lab.host, lab.username, lab.password, lab.port, lab.thumbprint, lab.allow_untrusted
+            lab.host,
+            lab.username,
+            lab.password,
+            lab.port,
+            lab.thumbprint,
+            lab.allow_untrusted,
         )
         try:
             vm = vim.VirtualMachine(lab.vm_moref, si._stub)
@@ -43,9 +54,7 @@ class TestCbt:
 
             device_key = _disk_device(vm).key
 
-            snap1 = _wait_for_task(
-                vm.CreateSnapshot_Task("cbt-baseline", "", False, False)
-            )
+            _wait_for_task(vm.CreateSnapshot_Task("cbt-baseline", "", False, False))
             vm.Reload()
             change_id_1 = nfc_auth.disk_change_id(vm, device_key)
             assert change_id_1
@@ -92,7 +101,12 @@ class TestCbt:
         Not the full sparse virtual capacity -- see docs/cbt.md.
         """
         si = _connect_vim(
-            lab.host, lab.username, lab.password, lab.port, lab.thumbprint, lab.allow_untrusted
+            lab.host,
+            lab.username,
+            lab.password,
+            lab.port,
+            lab.thumbprint,
+            lab.allow_untrusted,
         )
         try:
             vm = vim.VirtualMachine(lab.vm_moref, si._stub)
