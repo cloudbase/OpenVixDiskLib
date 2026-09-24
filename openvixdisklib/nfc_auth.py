@@ -24,7 +24,12 @@ import ssl
 
 from pyVim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
-from pyVmomi.VmomiSupport import F_OPTIONAL, CreateManagedType, GetVmodlType
+from pyVmomi.VmomiSupport import (
+    F_OPTIONAL,
+    CreateManagedType,
+    GetServiceVersions,
+    GetVmodlType,
+)
 
 NFC_SERVICE_MOID = "nfcService"
 AUTHD_DEFAULT_PORT = 902
@@ -132,6 +137,24 @@ def nfc_service(si: vim.ServiceInstance) -> vim.NfcService:
     return nfc_cls(NFC_SERVICE_MOID, si._stub)
 
 
+def _vim_preferred_api_versions() -> list[str]:
+    """Return pyVmomi vim25 8.x versions, newest first.
+
+    ``SmartConnect`` otherwise walks every version this pyVmomi knows,
+    including 9.x, so a vSphere 9 host would negotiate 9.x SOAP. NFC
+    was reverse-engineered on vSphere 8; keep that family so newer
+    hosts stay on an 8.x ``SOAPAction`` they still advertise.
+    """
+    versions = [
+        v for v in GetServiceVersions("vim25") if v.startswith("vim.version.v8_")
+    ]
+    if not versions:
+        raise RuntimeError(
+            "pyVmomi does not provide vim25 8.x types; OpenVixDiskLib requires them"
+        )
+    return versions
+
+
 def connect_vim(
     host: str,
     username: str,
@@ -171,6 +194,7 @@ def connect_vim(
         thumbprint=thumbprint,
         sslContext=ssl_context,
         disableSslCertValidation=skip_ca,
+        preferredApiVersions=_vim_preferred_api_versions(),
     )
 
 
