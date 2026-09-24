@@ -144,6 +144,47 @@ def _load_test_config() -> dict[str, Any]:
     }
 
 
+def load_hotadd_proxy_config() -> dict[str, str] | None:
+    """Return optional SSH settings for the Linux HotAdd proxy, if configured."""
+    if not os.path.isfile(_CONFIG_PATH):
+        return None
+    with open(_CONFIG_PATH, encoding="utf-8") as config_file:
+        data = yaml.safe_load(config_file) or {}
+    proxy = data.get("hotadd_proxy")
+    if not isinstance(proxy, dict) or not proxy.get("host"):
+        return None
+    identity = proxy.get("identity_file")
+    if identity:
+        identity_file = os.path.expanduser(str(identity))
+    else:
+        default_key = os.path.expanduser("~/.ssh/id_ed25519")
+        identity_file = default_key if os.path.isfile(default_key) else ""
+    return {
+        "host": str(proxy["host"]),
+        "user": str(proxy.get("user", "root")),
+        "identity_file": identity_file,
+    }
+
+
+def load_iscsi_san_config() -> dict[str, str] | None:
+    """Return optional iSCSI SAN lab settings from ``.test_config.yaml``.
+
+    The ``iscsi_san`` section is optional. When present, ``portal`` overrides
+    the default-route IPv4 used as the LIO listen address.
+    """
+    if not os.path.isfile(_CONFIG_PATH):
+        return None
+    with open(_CONFIG_PATH, encoding="utf-8") as config_file:
+        data = yaml.safe_load(config_file) or {}
+    section = data.get("iscsi_san")
+    if not isinstance(section, dict):
+        return {}
+    result: dict[str, str] = {}
+    if section.get("portal"):
+        result["portal"] = str(section["portal"])
+    return result
+
+
 def _connect_vim(
     host: str,
     username: str,
@@ -199,7 +240,12 @@ def _find_datastore(datacenter: vim.Datacenter, datastore_name: str) -> vim.Data
     return matches[0]
 
 
-def _vm_config_spec(vm_name: str, datastore_name: str) -> vim.vm.ConfigSpec:
+def _vm_config_spec(
+    vm_name: str,
+    datastore_name: str,
+    disk_controller: str = "pvscsi",
+    thin_provisioned: bool = True,
+) -> vim.vm.ConfigSpec:
     config = vim.vm.ConfigSpec()
     config.name = vm_name
     config.guestId = "otherGuest64"
@@ -207,17 +253,29 @@ def _vm_config_spec(vm_name: str, datastore_name: str) -> vim.vm.ConfigSpec:
     config.numCPUs = 1
     config.files = vim.vm.FileInfo(vmPathName=f"[{datastore_name}]")
 
-    controller = vim.vm.device.ParaVirtualSCSIController()
-    controller.key = 1000
-    controller.busNumber = 0
-    controller.sharedBus = vim.vm.device.VirtualSCSIController.Sharing.noSharing
+    if disk_controller == "nvme":
+        controller: vim.vm.device.VirtualController = (
+            vim.vm.device.VirtualNVMEController()
+        )
+        controller.key = 1000
+        controller.busNumber = 0
+    elif disk_controller == "pvscsi":
+        scsi = vim.vm.device.ParaVirtualSCSIController()
+        scsi.key = 1000
+        scsi.busNumber = 0
+        scsi.sharedBus = vim.vm.device.VirtualSCSIController.Sharing.noSharing
+        controller = scsi
+    else:
+        raise ValueError(f"unsupported disk_controller: {disk_controller}")
+
     controller_spec = vim.vm.device.VirtualDeviceSpec()
     controller_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
     controller_spec.device = controller
 
     backing = vim.vm.device.VirtualDisk.FlatVer2BackingInfo()
     backing.diskMode = "persistent"
-    backing.thinProvisioned = True
+    backing.thinProvisioned = thin_provisioned
+    backing.eagerlyScrub = not thin_provisioned
     backing.fileName = f"[{datastore_name}]"
     disk = vim.vm.device.VirtualDisk()
     disk.key = 2000
@@ -234,9 +292,22 @@ def _vm_config_spec(vm_name: str, datastore_name: str) -> vim.vm.ConfigSpec:
     return config
 
 
-def create_lab_vm() -> LabEnv:
-    """Create an empty VM with a 10 GiB thin disk for I/O tests."""
+def create_lab_vm(
+    *,
+    disk_controller: str = "pvscsi",
+    datastore: str | None = None,
+    thin_provisioned: bool = True,
+) -> LabEnv:
+    """Create an empty VM with a 10 GiB disk for I/O tests.
+
+    Args:
+        disk_controller: ``pvscsi`` (default) or ``nvme``.
+        datastore: Datastore name. Defaults to ``.test_config.yaml``.
+        thin_provisioned: Thin VMDK when True. SAN tests use False so the
+            flat extent is preallocated on VMFS.
+    """
     cfg = _load_test_config()
+    datastore_name = datastore or cfg["datastore"]
     thumbprint = nfc_auth.get_ssl_cert_thumbprint(cfg["host"], cfg["port"])
     si = _connect_vim(
         cfg["host"],
@@ -250,17 +321,24 @@ def create_lab_vm() -> LabEnv:
     try:
         content = si.RetrieveContent()
         datacenter = _find_datacenter(content, cfg["datacenter"])
-        datastore = _find_datastore(datacenter, cfg["datastore"])
-        if not datastore.host:
+        datastore_obj = _find_datastore(datacenter, datastore_name)
+        if not datastore_obj.host:
             raise RuntimeError(
-                f"datastore {cfg['datastore']!r} is not mounted on any host"
+                f"datastore {datastore_name!r} is not mounted on any host"
             )
-        host = datastore.host[0].key
+        host = datastore_obj.host[0].key
         pool = host.parent.resourcePool
         vm_name = _LAB_VM_PREFIX + uuid.uuid4().hex[:12]
         vm = _wait_for_task(
             datacenter.vmFolder.CreateVM_Task(
-                config=_vm_config_spec(vm_name, datastore.name), pool=pool, host=host
+                config=_vm_config_spec(
+                    vm_name,
+                    datastore_obj.name,
+                    disk_controller=disk_controller,
+                    thin_provisioned=thin_provisioned,
+                ),
+                pool=pool,
+                host=host,
             )
         )
         disks = [
@@ -277,7 +355,7 @@ def create_lab_vm() -> LabEnv:
             password=cfg["password"],
             allow_untrusted=cfg["allow_untrusted"],
             datacenter=cfg["datacenter"],
-            datastore=cfg["datastore"],
+            datastore=datastore_obj.name,
             thumbprint=thumbprint,
             vm_moref=vm._moId,
             vmx_spec=f"moref={vm._moId}",

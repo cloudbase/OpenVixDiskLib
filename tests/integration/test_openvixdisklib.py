@@ -81,7 +81,9 @@ class TestOpenvixdisklib:
             0: pattern_bytes(SECTOR_SIZE, b"OVDL-S0"),
             SECTOR_AT_1GB: pattern_bytes(SECTOR_SIZE, b"OVDL-1GB"),
         }
-        assert handle.get_transport_modes() == ["nbdssl", "nbd"]
+        modes = handle.get_transport_modes()
+        assert modes[0:2] == ["nbdssl", "nbd"]
+        assert set(modes) <= {"nbdssl", "nbd", "san", "hotadd"}
         with (
             handle.connect(**connect_kwargs) as conn,
             handle.open(conn, lab.disk_path, flags=open_flags) as disk,

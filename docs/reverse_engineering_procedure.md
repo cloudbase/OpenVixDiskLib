@@ -9,9 +9,12 @@ NFC work can follow the same loop instead of rediscovering it.
 
 Scope so far: `VixDiskLib_ConnectEx` + `VixDiskLib_Open` +
 `VixDiskLib_Read` + `VixDiskLib_Write` against lab vCenter 8.0.1 /
-ESXi 8, transports `nbd` and `nbdssl`. Validation method:
-`tests/integration/` (the session-scoped `lab` fixture creates a temporary
-empty VM with a 10 GiB disk and destroys it when the pytest session ends).
+ESXi 8, transports `nbd`, `nbdssl`, Linux-guest `hotadd`, and Linux
+`san`. Validation method: `tests/integration/` (the session-scoped `lab`
+fixture creates a temporary empty VM with a 10 GiB disk and destroys it
+when the pytest session ends). HotAdd live tests also SSH into a Linux
+proxy guest; see `docs/hotadd.md`. SAN live tests present a loop-backed
+iSCSI LUN; see `docs/san.md`.
 
 Rule from `AGENTS.md`: reuse pyVmomi for every public VIM operation.
 Only reimplement what pyVmomi does not expose.
@@ -61,6 +64,8 @@ names is in this table.
 | `strace -f -x` on `write` / `send*`      | First writable NFC capture without rebuilding the hook (Step 10)  | Noisy; TLS still opaque; `-s` truncates large extras               |
 | `pickle` of `LabEnv`                     | Create the temp VM unhooked, then load it under the hook          | `/tmp` only; never commit pickles (lab host and credentials)       |
 | ctypes drivers in `docs/probing_samples/` | Repeatable `ConnectEx` / `Open` / `Read` / `Write` under capture | Not library code                                                   |
+| in-kernel LIO + `losetup` / `iscsiadm`   | File-backed iSCSI LUN so ESXi and the runner share a NAA        | Not a VDDK protocol; lab-only (`tests/integration/iscsi_lab.py`)   |
+| `strace -e openat,pread64,pwrite64,ioctl` | Which `/dev/sd*` / `by-id` VDDK SAN opens and at which offsets  | No VMFS structure names; pair with `vixDiskLib.transport.LogLevel=4` |
 
 `ltrace` was considered for OpenSSL and libc `write`. It was not used:
 VDDK is stripped enough that `strace` on syscalls plus the `LD_PRELOAD`
@@ -409,3 +414,45 @@ Not yet reversed, same loop as above:
 - `VixDiskLib_GetInfo` capacity
 - Host-switch AIO messages
 - Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
+
+## HotAdd (not NFC)
+
+HotAdd does not use the capture loop above. VDDK SCSI-attaches the
+source VMDK to the proxy VM and opens a local whole disk. OpenVixDiskLib
+reuses pyVmomi `ReconfigureVM` for attach/detach and `pread`/`pwrite` on
+the Linux SCSI device. NVMe and SATA source disks are remapped onto a
+proxy SCSI controller. Details: `docs/hotadd.md`.
+
+## SAN (not NFC)
+
+SAN is also not a wire protocol. The backup host must see the **same
+SCSI LUN** ESXi uses for the VMFS datastore, match it by NAA, then read
+the VMDK data file through a VMFS driver. tcpdump of NFC is the wrong
+tool.
+
+Lab: a 20 GiB sparse file, `losetup`, in-kernel LIO iblock + iSCSI
+portal on the default-route IPv4, local `iscsiadm` login, pyVmomi
+`AddInternetScsiSendTargets` / `CreateVmfsDatastore`. Do not format or
+mount the LUN on Linux.
+
+Probe: `docs/probing_samples/vddk_san_trace.py` with
+`vixDiskLib.transport.LogLevel=4`. Native VDDK SAN needs
+`.vddk/lib64/libdiskLibPlugin.so`. Capture with
+`strace -e openat,pread64,pwrite64,ioctl`.
+
+Findings used by `openvixdisklib/san.py`:
+
+- GPT VMFS type GUID `2ae031aa-0f40-db11-9590-000c2911d1b8`, partition
+  LBA 2048 (1 MiB)
+- LVM magic `0xC001D00D` at partition + 1 MiB
+- FS magic `0x2fabf15e` version 24 at partition + 2 MiB or + 19 MiB
+- File descriptors (`fdmd`) hold 64-bit SFB/LFB pointers at the end of
+  a two-block descriptor. For large files the pointer array is in 64 KiB
+  sub-blocks. SFB
+  `((cluster * resourcesPerCluster) + resource) << fileBlockShift`
+  is relative to file-block 0, which sits after the LVM label and 16 ×
+  1 MiB heartbeats. Holes (address 0) read as zeros. Writes need an
+  allocated file block; SAN does not allocate.
+- First cut: powered-off persistent FlatVer2, no snapshot chain.
+
+Details: `docs/san.md`.
