@@ -189,9 +189,82 @@ uncompressed request (offsets in this read, not on disk)
 buf when skip_decompression=True: extras packed densely from offset 0
 ```
 
+## `VixDiskLib_QueryAllocatedBlocks` (AIO type 13)
+
+Reverse-engineered by extending the SSL/write-hook capture (Step 13/14
+technique, `docs/reverse_engineering_procedure.md`) to a ctypes call to
+`VixDiskLib_QueryAllocatedBlocks` after `Open`, first with
+`startSector=0` then — after the first capture's field guesses turned
+out wrong — again with a non-zero `startSector` against a known
+already-allocated region, to disambiguate fields that are 0 in the
+degenerate zero-start case.
+
+No SOAP or authd traffic; it is one more AIO message type in the
+already-open NFC/AIO session (like `DDB_GET`).
+
+Request (48 bytes)::
+
+    uint64 handle          (from OPEN_FILE)
+    uint64 reserved (0)
+    uint64 chunk_size_bytes    (chunk_size_sectors * sector_size)
+    uint64 start_offset_bytes  (start_sector * sector_size)
+    uint64 chunk_count         (num_sectors // chunk_size_sectors)
+    uint64 reserved (0)
+
+**Field-order pitfall:** `start_offset_bytes` is at byte offset 24, not
+8 — offset 8 is a reserved/always-zero field. A capture with
+`startSector=0` can't tell these two apart (both read 0); only a
+capture with a non-zero start distinguishes them.  A first
+implementation attempt put `start_offset_bytes` at offset 8 and got
+`chunk_count`-many all-zero bits back for every non-zero-start query,
+even for byte ranges known (from a zero-start, full-range query) to be
+allocated — the server was silently ignoring the offset the client
+thought it was requesting and returning an artifact of a different
+misread field.
+
+Reply: a 48-byte body (offset 32 echoes `chunk_count`) followed by a
+bitmap extra, one bit per chunk (LSB-first, `1` = chunk has allocated
+data), **padded up to a 4-byte boundary** — `ceil(chunk_count / 8)`
+alone is correct only when that value is already a multiple of 4
+(true for the `chunk_count=16384` case tested first, which is why the
+padding bug wasn't caught immediately; a `chunk_count=16` query
+exposed it, since `ceil(16/8)=2` bytes under-reads the real 4-byte
+reply and desyncs the connection — the *next* AIO reply's header then
+reads as garbage).
+
+Both `start_sector` and `num_sectors` must be exact multiples of
+`chunk_size_sectors`; the server returns an `NFC_AIO_MSG_ERROR` (type
+1) reply otherwise (hit by accident during validation with a
+non-aligned `start_sector`).
+
+`openvixdisklib.nfc_open.NfcDisk.query_allocated_blocks` implements
+this and run-length-merges contiguous set bits into
+`AllocatedBlock(offset, length)` tuples (sectors, matching VDDK's
+`VixDiskLibBlock`), exposed as
+`VixDiskLibHandle.query_allocated_blocks`. Validated against the live
+ESXi lab: a full-disk query, a query of a known-allocated sub-range,
+and an aligned empty range all match native VDDK's own
+`VixDiskLib_QueryAllocatedBlocks` output on the same disk.
+
+### Gotcha: query on the same still-open write handle can see stale data
+
+Writing a sector and then immediately calling
+`query_allocated_blocks` **on that same open handle, without closing
+it first**, can report the just-written region as *not* allocated —
+the allocation metadata this call reads apparently isn't guaranteed
+current until the write handle is closed. Closing after the write and
+reopening (or querying from a separate handle opened after the write
+completed) reports it correctly. Confirmed on both native VDDK and
+this implementation — same-session-no-close showed the write as
+unallocated on both, a fresh handle after close showed it correctly
+on both — so this is a real server/VMFS behavior, not a bug in either
+client. Real backup tools reading allocation before a read pass
+naturally do this anyway (open read-only after the writer's handle
+already closed), so it's unlikely to bite in practice, but do not
+call `query_allocated_blocks` right after a write on the same handle
+and expect it to reflect that write.
 ## What is still VDDK-only
 
 - zlib and skipz NBD compression flags
 - `VixDiskLib_ReadAsync` (same IO messages, different client threading)
-- `VixDiskLib_QueryAllocatedBlocks` / allocation bitmaps
 - `VixDiskLib_GetInfo` capacity (not required to read a known range)
