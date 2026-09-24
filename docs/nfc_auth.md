@@ -51,7 +51,9 @@ rather than crafting SOAP.
 
 - Endpoint: `https://<vcenter>:443/sdk`
 - Cookie: `vmware_soap_session`
-- SOAPAction: `"urn:vim25/8.0.1.0"` (negotiated)
+- SOAPAction: newest advertised 8.x (`SmartConnect` `preferredApiVersions`
+  is capped at `vim.version.v8_*` so a vSphere 9 host does not pick
+  pyVmomi 9 types). Lab vCenter 8.0.1 used `"urn:vim25/8.0.1.0"`.
 
 VDDK logs this as `Connected to VIM Server` / `Authenticating user` /
 `Logged in!`. OpenVixDiskLib keeps that `ServiceInstance` and
