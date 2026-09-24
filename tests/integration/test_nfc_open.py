@@ -13,8 +13,13 @@ class TestNfcOpen:
     @pytest.mark.parametrize("nfc_ssl", [True, False], ids=["nbdssl", "nbd"])
     @pytest.mark.parametrize(
         "compression",
-        [nfc_open.NFC_COMPRESSION_NONE, nfc_open.NFC_COMPRESSION_FASTLZ],
-        ids=["plain", "fastlz"],
+        [
+            nfc_open.NFC_COMPRESSION_NONE,
+            nfc_open.NFC_COMPRESSION_FASTLZ,
+            nfc_open.NFC_COMPRESSION_ZLIB,
+            nfc_open.NFC_COMPRESSION_SKIPZ,
+        ],
+        ids=["plain", "fastlz", "zlib", "skipz"],
     )
     def test_open_disk_and_read_first_sector(
         self, lab: LabEnv, nfc_ssl: bool, compression: int
