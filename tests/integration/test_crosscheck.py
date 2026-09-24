@@ -131,8 +131,13 @@ def _assert_both_read_bytes(
 class TestCrosscheck:
     @pytest.mark.parametrize(
         "open_flags",
-        [0, vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ],
-        ids=["plain", "fastlz"],
+        [
+            0,
+            vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_FASTLZ,
+            vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_ZLIB,
+            vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ,
+        ],
+        ids=["plain", "fastlz", "zlib", "skipz"],
     )
     def test_openvixdisklib_matches_vddk_sectors(
         self, lab: LabEnv, vddk: None, open_flags: int
@@ -156,6 +161,25 @@ class TestCrosscheck:
         }
         _write_sectors(lab, open_vix, ovdl_payloads, flags=open_flags)
         _assert_both_read(lab, sectors, ovdl_payloads, flags=open_flags)
+
+    def test_skipz_sparse_payload_matches_vddk(self, lab: LabEnv, vddk: None) -> None:
+        """SkipZ zero-run extras written by either library must read back on both."""
+        flags = vixdisklib.VIXDISKLIB_FLAG_OPEN_COMPRESSION_SKIPZ
+        start_byte = 8888 * SECTOR_SIZE
+        n_bytes = 4 * SECTOR_SIZE
+        vddk_payload = bytearray(n_bytes)
+        vddk_payload[137:157] = b"V" * 20
+        vddk_payload[900:950] = b"W" * 50
+        vddk_payload[1990:2000] = b"X" * 10
+        _write_bytes(lab, vixdisklib, start_byte, bytes(vddk_payload), flags=flags)
+        _assert_both_read_bytes(lab, start_byte, bytes(vddk_payload), flags=flags)
+
+        ovdl_payload = bytearray(n_bytes)
+        ovdl_payload[137:157] = b"O" * 20
+        ovdl_payload[900:950] = b"P" * 50
+        ovdl_payload[1990:2000] = b"Q" * 10
+        _write_bytes(lab, open_vix, start_byte, bytes(ovdl_payload), flags=flags)
+        _assert_both_read_bytes(lab, start_byte, bytes(ovdl_payload), flags=flags)
 
     @pytest.mark.slow
     @pytest.mark.parametrize(
