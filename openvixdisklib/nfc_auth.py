@@ -21,6 +21,8 @@ import contextlib
 import hashlib
 import socket
 import ssl
+import time
+from dataclasses import dataclass
 
 from pyVim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
@@ -34,6 +36,8 @@ from pyVmomi.VmomiSupport import (
 NFC_SERVICE_MOID = "nfcService"
 AUTHD_DEFAULT_PORT = 902
 _NFC_TYPES_REGISTERED = False
+_TASK_POLL_S = 0.5
+_TASK_TIMEOUT_S = 300
 
 
 def _ssl_client_context(verify: bool = True) -> ssl.SSLContext:
@@ -493,3 +497,106 @@ def authenticate(
         Disconnect(si)
         raise
     return NfcAuthSession(si, ticket, authd_sock, nfc_ssl=nfc_ssl)
+
+
+# --- Changed Block Tracking (CBT) ---
+#
+# VixDiskLib does not expose CBT itself: ``VixDiskLib_QueryAllocatedBlocks``
+# reports which blocks are allocated (non-sparse) within a single
+# NFC-opened disk, not which byte ranges changed between two points in
+# time. Real backup tools get that from vSphere's public
+# ``VirtualMachine.QueryChangedDiskAreas`` VIM call instead, used
+# alongside VDDK/NFC reads. The helpers below are thin wrappers around
+# that public pyVmomi call — no NFC reverse engineering was needed for
+# them. See ``docs/cbt.md``.
+
+
+@dataclass(frozen=True, slots=True)
+class ChangedExtent:
+    """One changed byte range, as returned by ``QueryChangedDiskAreas``."""
+
+    start: int
+    length: int
+
+
+@dataclass(frozen=True, slots=True)
+class ChangedDiskAreas:
+    """Result of ``QueryChangedDiskAreas``, converted to plain dataclasses."""
+
+    start_offset: int
+    length: int
+    changed_areas: tuple[ChangedExtent, ...]
+
+
+def _wait_for_cbt_task(task: vim.Task):
+    deadline = time.monotonic() + _TASK_TIMEOUT_S
+    while task.info.state in (vim.TaskInfo.State.running, vim.TaskInfo.State.queued):
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"timed out waiting for vSphere task {task}")
+        time.sleep(_TASK_POLL_S)
+    if task.info.state != vim.TaskInfo.State.success:
+        raise RuntimeError(f"vSphere task failed: {task.info.error}")
+    return task.info.result
+
+
+def enable_change_tracking(vm: vim.VirtualMachine) -> None:
+    """Enable CBT on ``vm``.
+
+    Takes effect for writes from this point forward; it does not
+    retroactively track earlier changes. A ``changeId`` for a disk only
+    becomes available after the next snapshot or power cycle once this
+    is set.
+    """
+    spec = vim.vm.ConfigSpec(changeTrackingEnabled=True)
+    _wait_for_cbt_task(vm.ReconfigVM_Task(spec=spec))
+
+
+def disk_change_id(vm: vim.VirtualMachine, device_key: int) -> str:
+    """Return the current ``changeId`` for the disk with ``device_key``.
+
+    Requires CBT to be enabled and at least one snapshot (or power
+    cycle) to have happened since. Raises ``ValueError`` if the disk
+    isn't found or has no ``changeId`` yet (CBT not active for it).
+    """
+    for device in vm.config.hardware.device:
+        if isinstance(device, vim.vm.device.VirtualDisk) and device.key == device_key:
+            change_id = getattr(device.backing, "changeId", None)
+            if not change_id:
+                raise ValueError(
+                    f"disk {device_key} on {vm._moId} has no changeId yet "
+                    "(enable CBT and take a snapshot first)"
+                )
+            return change_id
+    raise ValueError(f"no VirtualDisk with device key {device_key} on {vm._moId}")
+
+
+def query_changed_disk_areas(
+    vm: vim.VirtualMachine,
+    snapshot: vim.vm.Snapshot,
+    device_key: int,
+    change_id: str,
+    start_offset: int = 0,
+) -> ChangedDiskAreas:
+    """Return byte ranges changed since ``change_id``, up to ``snapshot``.
+
+    Thin wrapper around the public
+    ``VirtualMachine.QueryChangedDiskAreas`` VIM call. ``change_id`` is
+    the value from an earlier ``disk_change_id()`` call (or ``"*"`` for
+    the entire disk, e.g. for an initial full backup). Extents are
+    64 KiB-aligned in this lab's observations, but that granularity is
+    server-defined and not part of this function's contract.
+    """
+    result = vm.QueryChangedDiskAreas(
+        snapshot=snapshot,
+        deviceKey=device_key,
+        startOffset=start_offset,
+        changeId=change_id,
+    )
+    return ChangedDiskAreas(
+        start_offset=result.startOffset,
+        length=result.length,
+        changed_areas=tuple(
+            ChangedExtent(start=extent.start, length=extent.length)
+            for extent in result.changedArea
+        ),
+    )

@@ -381,8 +381,21 @@ not an OPEN_FILE bit. Capture VDDK with that flag (NBD + the port-902
 Replay: pip `pyfastlz` via `openvixdisklib/fastlz.py` (NFC extra is
 raw FastLZ, without the wrapper's 4-byte length prefix) plus `NfcDisk`
 compression on each IO. Proof:
-`tests/integration/test_nfc_read_write.py` (`fastlz`) and
-`tests/perf/test_compare.py`.
+## Note — CBT needed no reverse engineering
+
+Investigated change-block tracking (backlog item "CBT /
+`QueryAllocatedBlocks`") expecting an NFC capture like the steps above.
+It turned out `VirtualMachine.QueryChangedDiskAreas` — the actual
+changed-byte-range query backup tools use — is public pyVmomi API with
+no VDDK/NFC involvement at all; only `VixDiskLib_QueryAllocatedBlocks`
+(disk-internal allocated-block bitmap, a different and lesser feature)
+needed NFC work (done separately, see Step 15 below). Implemented as
+`openvixdisklib.nfc_auth.enable_change_tracking` /
+`disk_change_id` / `query_changed_disk_areas`; validated end-to-end
+against a temp VM on the lab (enable CBT, snapshot, write a known
+sector, snapshot, query — the written sector fell inside the reported
+extent). Full workflow and lab evidence: `docs/cbt.md`.
+
 
 ## What to write down
 
@@ -405,7 +418,7 @@ OpenVixDiskLib.
 Not yet reversed, same loop as above:
 
 - `DDB_GET` / disk geometry, zlib/skipz compression, encrypted disks
-- `NFC_DELTA_DISK`, CBT / `QueryAllocatedBlocks`
+- `NFC_DELTA_DISK`, `QueryAllocatedBlocks`
 - `VixDiskLib_GetInfo` capacity
 - Host-switch AIO messages
 - Direct ESXi `ha-nfc` without vCenter `vpxa-nfc`
