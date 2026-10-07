@@ -2,12 +2,11 @@ pbr
 # TODO: consider vendorizing this library for security reasons. It's a fork of
 # an unmaintained repo, without much activity.
 # NOTE: PyPI only ships wheels up to cp312 and publishes no sdist, so pip has
-# nothing to build on 3.13+. Fall back to the same tagged source there
+# nothing to build on 3.13+. Install the tagged source from git instead
 # (built directly, since its FastLZ C source is a git submodule that a
 # plain sdist/tarball would not include).
 # bb65a5f4a01332785c8c636fb6a8b062ff18ca75 === v0.0.1 tag
-pyfastlz==0.0.1; python_version < "3.13"
-pyfastlz @ git+https://github.com/PaulChanHK/python-fastlz.git@bb65a5f4a01332785c8c636fb6a8b062ff18ca75 ; python_version >= "3.13"
+pyfastlz @ git+https://github.com/PaulChanHK/python-fastlz.git@bb65a5f4a01332785c8c636fb6a8b062ff18ca75
 pyOpenSSL
 pyVmomi>=7.0
 PyYAML
