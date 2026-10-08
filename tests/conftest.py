@@ -16,6 +16,7 @@ from tests.integration.base import (
     destroy_lab_vm,
     ensure_vddk_library_path,
     require_vddk,
+    resolve_direct_esxi_lab,
 )
 
 
@@ -29,6 +30,12 @@ def lab() -> Iterator[LabEnv]:
         yield env
     finally:
         destroy_lab_vm(env)
+
+
+@pytest.fixture(scope="session")
+def esxi_lab(lab: LabEnv) -> LabEnv:
+    """The session lab VM addressed through its ESXi host, not vCenter."""
+    return resolve_direct_esxi_lab(lab)
 
 
 @pytest.fixture(scope="session")

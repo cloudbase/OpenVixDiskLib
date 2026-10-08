@@ -305,7 +305,10 @@ class VixDiskLibHandle:
             conn.si, vm, read_only=read_only, disk_path=None if read_only else disk_path
         )
         authd_sock = nfc_auth.connect_authd(
-            ticket, allow_untrusted=conn.allow_untrusted, nfc_ssl=nfc_ssl
+            ticket,
+            allow_untrusted=conn.allow_untrusted,
+            nfc_ssl=nfc_ssl,
+            fallback_host=conn.si._stub.host.rsplit(":", 1)[0],
         )
         session = nfc_auth.NfcAuthSession(conn.si, ticket, authd_sock, nfc_ssl=nfc_ssl)
         try:

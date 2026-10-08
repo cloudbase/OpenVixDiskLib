@@ -17,7 +17,8 @@ from VDDK 8 NBD traffic; see `docs/`.
 
 ## Status
 
-Supported and tested on **vCenter 8 / ESXi 8** (lab: 8.0.1). The
+Supported and tested on **vCenter 8 / ESXi 8** (lab: 8.0.1), including a
+standalone ESXi host with no vCenter. The
 VixDiskLib compatibility mode is `8.0` only. VIM login requests
 pyVmomi's vim25 **8.x** versions, so a newer host such as vSphere 9 stays
 on 8.x SOAP instead of 9.x types.
@@ -27,14 +28,13 @@ moment.
 
 Default transport is `nbdssl` (`nbd` is still available):
 
-- `VixDiskLib_ConnectEx` (UID credentials)
+- `VixDiskLib_ConnectEx` (UID credentials; vCenter or direct ESXi)
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
 - `VixDiskLib_Read` (optional ``skip_decompression`` packs FastLZ extras)
 - `VixDiskLib_Write`
 
 Not implemented: compression open flags other than FastLZ, CBT /
-allocated-block queries, disk geometry (`DDB_GET`), encrypted disks,
-and direct ESXi `ha-nfc` without vCenter `vpxa-nfc`.
+allocated-block queries, disk geometry (`DDB_GET`), and encrypted disks.
 
 Requires Python 3.10 or later.
 
@@ -103,11 +103,17 @@ password: secret
 allow_untrusted: true
 datacenter: Datacenter
 datastore: datastore0
+esxi:
+  username: root
+  password: secret
 ```
 
 A session-scoped pytest fixture creates an empty VM with a 10 GiB thin
 disk on that datastore and tears it down when the session ends. Tests
-write known patterns and read them back.
+write known patterns and read them back. Direct-ESXi tests pick the lab
+VM's host from vCenter and log into hostd (default ``root`` and the
+vCenter password) so NFC uses ``ha-nfc-service`` instead of
+``nfcService``. They skip when lockdown is on or hostd login fails.
 
 ```bash
 tox -e integration
