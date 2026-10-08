@@ -60,7 +60,7 @@ Little-endian, after the usual 16-byte AIO header
 | 24     | `uint32` | Total byte length                                         |
 | 28     | `uint32` | Byte offset of this fragment (`0`, `65536`, …)            |
 | 32     | `uint32` | This fragment’s uncompressed length                       |
-| 36     | `uint32` | Extra size (same as 32, or FastLZ packed size)            |
+| 36     | `uint32` | Extra size (same as 32, or the compressed packed size)    |
 | 40     | `uint32` | `0`                                                       |
 
 This is the same 44-byte layout as a **read reply** fragment
@@ -68,11 +68,13 @@ This is the same 44-byte layout as a **read reply** fragment
 reply fragments. A single-fragment write (≤ 64 KiB) still looks like a
 `uint64` length at offset 24 because the fragment offset is 0.
 
-FASTLZ writes use the same header. The opcode `uint64` high half is
-`2`, offset 36 is the compressed size, and FastLZ bytes follow instead
-of raw sectors. If compression does not shrink the fragment, VDDK
-sends type `0` and raw extra. Each fragment is compressed on its own;
-a 32 MiB FastLZ write is 512 independent FastLZ extras, not one.
+Compressed writes (zlib, FastLZ, or SkipZ) use the same header. The
+opcode `uint64` high half is `1`/`2`/`3` respectively, offset 36 is the
+compressed size, and compressed bytes follow instead of raw sectors.
+If compression does not shrink the fragment, the client sends type `0`
+and raw extra instead. Each fragment is compressed on its own; a
+32 MiB compressed write is 512 independent compressed extras, not one.
+Wire formats for all three algorithms: `docs/nfc_read.md`.
 
 Sector bytes follow the 44-byte payload and are **not** counted in AIO
 `size`. OpenVixDiskLib sends header + payload + extra in one

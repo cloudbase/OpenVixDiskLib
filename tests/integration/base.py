@@ -103,6 +103,29 @@ def pattern_bytes(length: int, seed: bytes) -> bytes:
     return (seed * ((length // len(seed)) + 1))[:length]
 
 
+def sparse_bytes(length: int, seed: bytes) -> bytes:
+    """Return ``length`` bytes of ``seed`` runs separated by zero gaps.
+
+    SkipZ only shrinks when a fragment contains zeros; an all-nonzero
+    pattern falls back to NFC type 0.
+    """
+    if not seed:
+        raise ValueError("seed must be non-empty")
+    if length < 1:
+        return b""
+    run = min(len(seed), length)
+    # ESXi SkipZ-compresses reads when zero runs are long (a sector or
+    # more). Tight 11-byte gaps stay type 0 on the wire.
+    gap = max(run * 8, SECTOR_SIZE)
+    out = bytearray(length)
+    pos = 0
+    while pos < length:
+        chunk = (seed * ((run // len(seed)) + 1))[: min(run, length - pos)]
+        out[pos : pos + len(chunk)] = chunk
+        pos += len(chunk) + gap
+    return bytes(out)
+
+
 def ensure_vddk_library_path() -> None:
     """Prepend ``.vddk`` to ``LD_LIBRARY_PATH`` if it is not already there."""
     current = os.environ.get("LD_LIBRARY_PATH", "")

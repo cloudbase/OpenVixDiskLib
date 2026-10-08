@@ -19,8 +19,13 @@ _32MIB = 32 * 1024 * 1024
 class TestNfcReadWrite:
     @pytest.mark.parametrize(
         "compression",
-        [nfc_open.NFC_COMPRESSION_NONE, nfc_open.NFC_COMPRESSION_FASTLZ],
-        ids=["plain", "fastlz"],
+        [
+            nfc_open.NFC_COMPRESSION_NONE,
+            nfc_open.NFC_COMPRESSION_FASTLZ,
+            nfc_open.NFC_COMPRESSION_ZLIB,
+            nfc_open.NFC_COMPRESSION_SKIPZ,
+        ],
+        ids=["plain", "fastlz", "zlib", "skipz"],
     )
     def test_sector_writes_and_reads(self, lab: LabEnv, compression: int) -> None:
         """Write known patterns and read them back at several ranges."""
@@ -67,6 +72,51 @@ class TestNfcReadWrite:
                 big_got[SECTOR_SIZE : 2 * SECTOR_SIZE]
                 == big_to_write[SECTOR_SIZE : 2 * SECTOR_SIZE]
             )
+
+    def test_skipz_round_trips_zero_runs(self, lab: LabEnv) -> None:
+        """SkipZ encodes non-zero runs only; unaligned zero gaps must survive.
+
+        Offsets match the live VDDK capture in ``docs/nfc_read.md`` (137,
+        900, 1990). An all-nonzero pattern would fall back to type 0.
+        """
+        n_sectors = 4
+        to_write = bytearray(n_sectors * SECTOR_SIZE)
+        to_write[137:157] = b"A" * 20
+        to_write[900:950] = b"B" * 50
+        to_write[1990:2000] = b"C" * 10
+        expected = bytes(to_write)
+        with (
+            lab.authenticate(read_only=False) as session,
+            nfc_open.open_disk(
+                session,
+                lab.disk_path,
+                read_only=False,
+                compression=nfc_open.NFC_COMPRESSION_SKIPZ,
+            ) as disk,
+        ):
+            disk.write(16, n_sectors, expected)
+            got = disk.read(16, n_sectors)
+            assert got == expected
+            skip_buf = bytearray(len(expected))
+            result = disk.readinto(16, n_sectors, skip_buf, skip_decompression=True)
+        assert result.fragments
+        assert any(
+            frag.compression_type == nfc_open.NFC_COMPRESSION_SKIPZ
+            for frag in result.fragments
+        )
+        rebuilt = bytearray(result.uncompressed_length)
+        for frag in result.fragments:
+            extra = bytes(skip_buf[frag.offset : frag.offset + frag.length])
+            if frag.compression_type == nfc_open.NFC_COMPRESSION_SKIPZ:
+                chunk = nfc_open._skipz_decompress(extra, frag.uncompressed_length)
+            elif frag.compression_type == nfc_open.NFC_COMPRESSION_NONE:
+                chunk = extra
+            else:
+                raise AssertionError(
+                    f"unexpected compression_type {frag.compression_type}"
+                )
+            rebuilt[frag.dest : frag.dest + frag.uncompressed_length] = chunk
+        assert bytes(rebuilt) == expected
 
     @pytest.mark.parametrize(
         "compression",
