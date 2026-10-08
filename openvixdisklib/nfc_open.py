@@ -26,6 +26,7 @@ import socket
 import ssl
 import struct
 from dataclasses import dataclass
+from typing import Protocol
 
 from openvixdisklib import fastlz
 from openvixdisklib.nfc_auth import NfcAuthSession, _ssl_client_context
@@ -64,7 +65,13 @@ NFC_AIO_MSG_CLOSE_FILE = 5
 NFC_AIO_MSG_IO = 7
 NFC_AIO_MSG_SET_SOCK_OPTS = 9
 NFC_AIO_MSG_DDB_GET = 11
+NFC_AIO_MSG_QUERY_ALLOCATED_BLOCKS = 13
 NFC_AIO_MSG_SET_RES_POOL = 22
+
+# Chunk size used in this project's capture/validation of
+# query_allocated_blocks (128 sectors = 64 KiB); not a documented VDDK
+# default, just a convenient granularity that worked in this lab.
+NFC_QUERY_ALLOCATED_BLOCKS_CHUNK_SECTORS = 128
 
 # Open-file body: file type NFC_DISK. 0x1e is what VDDK sends for
 # VIXDISKLIB_FLAG_OPEN_READ_ONLY; writable opens clear bit 0x04 (0x1a).
@@ -80,6 +87,14 @@ NFC_AIO_IO_READ = 1
 # fall back to type 0 with raw extra data.
 NFC_COMPRESSION_NONE = 0
 NFC_COMPRESSION_FASTLZ = 2
+
+
+@dataclass(frozen=True, slots=True)
+class AllocatedBlock:
+    """One allocated run, matching VDDK's ``VixDiskLibBlock`` (sectors)."""
+
+    offset: int
+    length: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,18 +185,31 @@ def wrap_nfcssl_socket(ssock: ssl.SSLSocket, server_hostname: str) -> ssl.SSLSoc
         raise
 
 
+class NfcTransport(Protocol):
+    """Byte pipe used after the NFC handshake (TCP, TLS, or a test fake)."""
+
+    def sendall(self, data: bytes) -> None:
+        """Send ``data`` in full."""
+
+    def recv_into(self, buffer: memoryview, nbytes: int = 0, flags: int = 0) -> int:
+        """Read into ``buffer`` and return the number of bytes stored."""
+
+    def close(self) -> None:
+        """Close the underlying connection."""
+
+
 def _enable_tcp_nodelay(sock: socket.socket) -> None:
     """Disable Nagle so a small AIO header is not held back from its extra."""
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 
-def _recvn(sock: socket.socket, size: int) -> bytes:
+def _recvn(sock: NfcTransport, size: int) -> bytes:
     buf = bytearray(size)
     _recvn_into(sock, memoryview(buf))
     return bytes(buf)
 
 
-def _recvn_into(sock: socket.socket, buf: memoryview) -> None:
+def _recvn_into(sock: NfcTransport, buf: memoryview) -> None:
     """Read exactly ``len(buf)`` bytes into ``buf``."""
     view = buf.cast("B") if buf.format != "B" else buf
     filled = 0
@@ -220,7 +248,7 @@ def _aio_extra_len(ctype: int, body: bytes, chunk_len: int) -> int:
     raise NfcProtocolError(f"unsupported NFC IO compression type {ctype}")
 
 
-def _send_nfc_msg(sock: socket.socket, msg_type: int, body: bytes = b"") -> None:
+def _send_nfc_msg(sock: NfcTransport, msg_type: int, body: bytes = b"") -> None:
     if len(body) > NFC_MSG_SIZE - 4:
         raise ValueError("NFC classic message body too large")
     frame = struct.pack("<I", msg_type) + body
@@ -253,7 +281,7 @@ class NfcDisk:
 
     def __init__(
         self,
-        sock: socket.socket,
+        sock: NfcTransport,
         path: str,
         handle: int,
         sector_size: int,
@@ -516,6 +544,80 @@ class NfcDisk:
                 f"expected type={NFC_AIO_MSG_IO} opId={op_id}"
             )
 
+    def query_allocated_blocks(
+        self,
+        start_sector: int,
+        num_sectors: int,
+        chunk_size_sectors: int = NFC_QUERY_ALLOCATED_BLOCKS_CHUNK_SECTORS,
+    ) -> tuple[AllocatedBlock, ...]:
+        """Return allocated (non-sparse) runs.
+
+        Matches ``VixDiskLib_QueryAllocatedBlocks``.
+
+        Captured from VDDK: a 48-byte request::
+
+            uint64 handle
+            uint64 reserved (0)
+            uint64 chunk_size_bytes       (chunk_size_sectors * sector_size)
+            uint64 start_offset_bytes     (start_sector * sector_size)
+            uint64 chunk_count            (num_sectors // chunk_size_sectors)
+            uint64 reserved (0)
+
+        (``start_offset_bytes`` and the first ``reserved`` field are
+        easy to swap — both are 0 in a ``start_sector=0`` capture,
+        which is what an earlier draft of this method got wrong; a
+        second capture with a non-zero ``start_sector`` was needed to
+        tell them apart.)
+
+        The reply echoes a 48-byte body whose offset 32 carries the
+        same chunk count back, followed by a bitmap extra — one bit
+        per chunk, LSB-first, set when that chunk contains allocated
+        data, padded up to a **4-byte boundary** (``ceil(chunk_count / 8)``
+        alone under-reads and desyncs the connection whenever that
+        raw byte count isn't already a multiple of 4).
+        This mirrors VDDK's own client-side behavior of run-length
+        merging contiguous set bits into ``VixDiskLibBlock`` entries
+        (offset/length here are in **sectors**, matching the public
+        VDDK struct, unlike the bytes used on the wire). See
+        ``docs/nfc_read.md``.
+
+        Args:
+            start_sector: Sector offset from the start of the disk;
+                must be a multiple of ``chunk_size_sectors`` (the
+                server returns an AIO error otherwise).
+            num_sectors: Number of sectors to query; must be a multiple
+                of ``chunk_size_sectors``.
+            chunk_size_sectors: Minimum run granularity, in sectors.
+        """
+        if num_sectors % chunk_size_sectors != 0:
+            raise ValueError("num_sectors must be a multiple of chunk_size_sectors")
+        if start_sector % chunk_size_sectors != 0:
+            raise ValueError("start_sector must be a multiple of chunk_size_sectors")
+        chunk_count = num_sectors // chunk_size_sectors
+        bitmap_bytes = -(-((chunk_count + 7) // 8) // 4) * 4
+        request = struct.pack(
+            "<QQQQQQ",
+            self.handle,
+            0,
+            chunk_size_sectors * self.sector_size,
+            start_sector * self.sector_size,
+            chunk_count,
+            0,
+        )
+        reply = self._aio_roundtrip(
+            NFC_AIO_MSG_QUERY_ALLOCATED_BLOCKS, request, extra_recv=bitmap_bytes
+        )
+        body, bitmap = reply[:48], reply[48:]
+        reported_chunk_count = struct.unpack_from("<Q", body, 32)[0]
+        if reported_chunk_count != chunk_count:
+            raise NfcProtocolError(
+                f"QueryAllocatedBlocks reported {reported_chunk_count} chunks, "
+                f"expected {chunk_count}"
+            )
+        return _decode_allocated_bitmap(
+            bitmap, chunk_count, start_sector, chunk_size_sectors
+        )
+
     def close(self) -> None:
         """Close the VMDK, the AIO session, and the classic NFC session."""
         if self._closed:
@@ -589,6 +691,38 @@ def _aio_prepare(disk: NfcDisk) -> None:
     disk._aio_roundtrip(NFC_AIO_MSG_OPEN_SESSION, open_session)
     disk._aio_roundtrip(NFC_AIO_MSG_SET_SOCK_OPTS, bytes(12))
     disk._aio_roundtrip(NFC_AIO_MSG_SET_RES_POOL, struct.pack("<I", 1))
+
+
+def _decode_allocated_bitmap(
+    bitmap: bytes, chunk_count: int, start_sector: int, chunk_size_sectors: int
+) -> tuple[AllocatedBlock, ...]:
+    """Run-length-merge a QueryAllocatedBlocks bitmap into ``AllocatedBlock``s.
+
+    ``bitmap`` is one bit per chunk, LSB-first (bit 0 of byte 0 is
+    chunk 0), possibly longer than strictly needed for padding; only
+    the first ``chunk_count`` bits are read.
+    """
+    blocks = []
+    run_start = None
+    for chunk_idx in range(chunk_count):
+        # One bit per chunk, LSB-first: byte = chunk_idx // 8, bit =
+        # chunk_idx % 8. Shift that bit to position 0 and keep it with & 1
+        # (1 = allocated, 0 = hole). Chunk 10 is bit 2 of bitmap[1].
+        allocated = (bitmap[chunk_idx // 8] >> (chunk_idx % 8)) & 1
+        if allocated and run_start is None:
+            run_start = chunk_idx
+        elif not allocated and run_start is not None:
+            blocks.append((run_start, chunk_idx - run_start))
+            run_start = None
+    if run_start is not None:
+        blocks.append((run_start, chunk_count - run_start))
+    return tuple(
+        AllocatedBlock(
+            offset=start_sector + run_chunk * chunk_size_sectors,
+            length=run_len * chunk_size_sectors,
+        )
+        for run_chunk, run_len in blocks
+    )
 
 
 def _parse_open_reply(body: bytes) -> tuple[int, int]:

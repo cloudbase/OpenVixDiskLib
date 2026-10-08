@@ -28,6 +28,7 @@ from openvixdisklib import nfc_auth, nfc_open
 
 ReadResult = nfc_open.ReadResult
 ReadFragment = nfc_open.ReadFragment
+AllocatedBlock = nfc_open.AllocatedBlock
 
 LOG = logging.getLogger(__name__)
 
@@ -325,6 +326,26 @@ class VixDiskLibHandle:
             yield handle
         finally:
             self.close(handle)
+
+    def query_allocated_blocks(
+        self,
+        disk_handle: _DiskHandle,
+        start_sector: int,
+        num_sectors: int,
+        chunk_size_sectors: int = nfc_open.NFC_QUERY_ALLOCATED_BLOCKS_CHUNK_SECTORS,
+    ) -> tuple[nfc_open.AllocatedBlock, ...]:
+        """Return allocated runs. Matches ``VixDiskLib_QueryAllocatedBlocks``.
+
+        Args:
+            disk_handle: Handle from ``open()``.
+            start_sector: Sector offset from the start of the disk.
+            num_sectors: Number of sectors to query; must be a multiple
+                of ``chunk_size_sectors``.
+            chunk_size_sectors: Minimum run granularity, in sectors.
+        """
+        return disk_handle.disk.query_allocated_blocks(
+            start_sector, num_sectors, chunk_size_sectors
+        )
 
     def read(
         self,
