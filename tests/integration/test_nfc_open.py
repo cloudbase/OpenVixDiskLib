@@ -6,7 +6,7 @@
 import pytest
 
 from openvixdisklib import nfc_open
-from tests.integration.base import SECTOR_SIZE, LabEnv, pattern_bytes
+from tests.integration.base import _DISK_CAPACITY_KB, SECTOR_SIZE, LabEnv, pattern_bytes
 
 
 class TestNfcOpen:
@@ -34,3 +34,18 @@ class TestNfcOpen:
             got = disk.read(0, 1)
             assert got is not expected
             assert got == expected
+
+    def test_open_disk_reports_capacity_and_geometry(self, lab: LabEnv) -> None:
+        """OPEN_FILE's reply carries capacity and physical geometry (GetInfo)."""
+        with (
+            lab.authenticate() as session,
+            nfc_open.open_disk(session, lab.disk_path) as disk,
+        ):
+            assert disk.info is not None
+            assert disk.info.capacity_sectors == (
+                _DISK_CAPACITY_KB * 1024 // SECTOR_SIZE
+            )
+            geo = disk.info.phys_geo
+            assert geo.cylinders > 0
+            assert geo.heads > 0
+            assert geo.sectors > 0
