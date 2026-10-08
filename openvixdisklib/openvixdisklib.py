@@ -28,6 +28,8 @@ from openvixdisklib import nfc_auth, nfc_open
 
 ReadResult = nfc_open.ReadResult
 ReadFragment = nfc_open.ReadFragment
+DiskInfo = nfc_open.DiskInfo
+DiskGeometry = nfc_open.DiskGeometry
 
 LOG = logging.getLogger(__name__)
 
@@ -325,6 +327,17 @@ class VixDiskLibHandle:
             yield handle
         finally:
             self.close(handle)
+
+    def get_info(self, disk_handle: _DiskHandle) -> nfc_open.DiskInfo:
+        """Return disk info. Matches ``VixDiskLib_GetInfo``.
+
+        ``capacity_sectors``/``phys_geo`` are free (already in the
+        ``OPEN_FILE`` reply from ``open()``); ``bios_geo``/
+        ``adapter_type``/``uuid`` cost 5 ``DDB_GET`` round trips, same
+        as real VDDK pays on every ``GetInfo`` call. See
+        ``docs/nfc_open.md``.
+        """
+        return disk_handle.disk.query_full_info()
 
     def read(
         self,

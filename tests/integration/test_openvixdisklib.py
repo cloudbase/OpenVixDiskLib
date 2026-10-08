@@ -13,6 +13,7 @@ from openvixdisklib import fastlz, nfc_open
 from openvixdisklib import openvixdisklib as vixdisklib
 from openvixdisklib.openvixdisklib import ReadResult
 from tests.integration.base import (
+    _DISK_CAPACITY_KB,
     SECTOR_AT_1GB,
     SECTOR_SIZE,
     LabEnv,
@@ -93,6 +94,31 @@ class TestOpenvixdisklib:
                 read_buf[:SECTOR_SIZE] = b"\xa5" * SECTOR_SIZE
                 handle.read(disk, start, 1, read_buf)
                 assert read_buf.raw[:SECTOR_SIZE] == expected
+
+    def test_get_info(self, lab: LabEnv) -> None:
+        """get_info returns the lab VM's known disk capacity and geometry."""
+        handle = vixdisklib.VixDiskLibHandle(vixdisklib_compatibility_version="8.0")
+        connect_kwargs = lab.vixdisklib_connect_kwargs(
+            {"allow_untrusted": lab.allow_untrusted, "read_only": True}
+        )
+        with (
+            handle.connect(**connect_kwargs) as conn,
+            handle.open(
+                conn, lab.disk_path, flags=vixdisklib.VIXDISKLIB_FLAG_OPEN_READ_ONLY
+            ) as disk,
+        ):
+            info = handle.get_info(disk)
+            assert info.capacity_sectors == _DISK_CAPACITY_KB * 1024 // SECTOR_SIZE
+            assert info.phys_geo.cylinders > 0
+            assert info.phys_geo.heads > 0
+            assert info.phys_geo.sectors > 0
+            # bios_geo is DDB-derived and unset (all zero) on a disk with
+            # no snapshots yet, matching VDDK's own default for a missing key.
+            assert info.bios_geo == vixdisklib.DiskGeometry(
+                cylinders=0, heads=0, sectors=0
+            )
+            assert info.adapter_type  # non-empty DDB string, e.g. "lsilogic"
+            assert info.uuid  # non-empty DDB string
 
     def test_read_only_open_snapshot_parent(self, lab: LabEnv) -> None:
         """Read-only Open uses NfcGetVmFiles, including a snapshot parent path.
