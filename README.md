@@ -17,7 +17,8 @@ from VDDK 8 NBD traffic; see `docs/`.
 
 ## Status
 
-Supported and tested on **vCenter 8 / ESXi 8** (lab: 8.0.1). The
+Supported and tested on **vCenter 8 / ESXi 8** (lab: 8.0.1), including a
+standalone ESXi host with no vCenter. The
 VixDiskLib compatibility mode is `8.0` only. VIM login requests
 pyVmomi's vim25 **8.x** versions, so a newer host such as vSphere 9 stays
 on 8.x SOAP instead of 9.x types.
@@ -27,14 +28,32 @@ moment.
 
 Default transport is `nbdssl` (`nbd` is still available):
 
-- `VixDiskLib_ConnectEx` (UID credentials)
+- `VixDiskLib_ConnectEx` (UID credentials; vCenter or direct ESXi)
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
 - `VixDiskLib_Read` (optional ``skip_decompression`` packs FastLZ extras)
 - `VixDiskLib_Write`
+- `VixDiskLib_GetInfo` (capacity and physical geometry from the `Open`
+  reply; `biosGeo`/`adapterType`/`uuid` from `DDB_GET`, matching real
+  VDDK's cost and behavior)
+- `VixDiskLib_QueryAllocatedBlocks` (allocated-block bitmap; see
+  `docs/nfc_read.md`)
+- Changed Block Tracking: `openvixdisklib.nfc_auth.enable_change_tracking`
+  / `disk_change_id` / `query_changed_disk_areas` (public VIM API, not
+  part of VixDiskLib itself; see `docs/cbt.md`)
+- Encrypted VM disks — read/write transparently with no
+  encryption-specific code (see `docs/encryption.md`)
 
-Not implemented: compression open flags other than FastLZ, CBT /
-allocated-block queries, disk geometry (`DDB_GET`), encrypted disks,
-and direct ESXi `ha-nfc` without vCenter `vpxa-nfc`.
+Reading/writing a snapshot delta file directly (and running
+`query_allocated_blocks` against it) already works — `NFC_DELTA_DISK`
+turned out to be an optional VMFS-only VDDK client optimization, not a
+correctness requirement (see `docs/reverse_engineering_procedure.md`).
+
+Reading/writing an encrypted VM disk also already works, with no
+encryption-specific code — ESXi handles it transparently below NFC
+whenever the serving host already holds the disk's key (see
+`docs/encryption.md`).
+
+Not implemented: compression open flags other than FastLZ.
 
 Requires Python 3.10 or later.
 
