@@ -31,8 +31,11 @@ Default transport is `nbdssl` (`nbd` is still available):
 - `VixDiskLib_Open` (datastore path, read-only or read-write)
 - `VixDiskLib_Read` (optional ``skip_decompression`` packs FastLZ extras)
 - `VixDiskLib_Write`
+- Changed Block Tracking: `openvixdisklib.nfc_auth.enable_change_tracking`
+  / `disk_change_id` / `query_changed_disk_areas` (public VIM API, not
+  part of VixDiskLib itself; see `docs/cbt.md`)
 
-Not implemented: compression open flags other than FastLZ, CBT /
+Not implemented: compression open flags other than FastLZ,
 allocated-block queries, disk geometry (`DDB_GET`), encrypted disks,
 and direct ESXi `ha-nfc` without vCenter `vpxa-nfc`.
 
