@@ -20,10 +20,11 @@ from VDDK 8 NBD traffic; see `docs/`.
 Supported and tested on **vCenter 8 / ESXi 8** (lab: 8.0.1). The
 VixDiskLib compatibility mode is `8.0` only. VIM login requests
 pyVmomi's vim25 **8.x** versions, so a newer host such as vSphere 9 stays
-on 8.x SOAP instead of 9.x types.
+on 8.x SOAP instead of 9.x types. Hosts that do not advertise 8.x, such as
+vCenter / ESXi 7, fall back to vim25 **7.x**.
 
-vSphere 9 is untested. vCenter / ESXi 7 and earlier are not supported at the
-moment.
+The minimum supported version is vCenter / ESXi 7.0. vSphere 9 is
+untested. vCenter / ESXi 6.x is deprecated and no longer supported.
 
 Default transport is `nbdssl` (`nbd` is still available):
 
