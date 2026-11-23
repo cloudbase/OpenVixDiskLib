@@ -51,9 +51,12 @@ rather than crafting SOAP.
 
 - Endpoint: `https://<vcenter>:443/sdk`
 - Cookie: `vmware_soap_session`
-- SOAPAction: newest advertised 8.x (`SmartConnect` `preferredApiVersions`
-  is capped at `vim.version.v8_*` so a vSphere 9 host does not pick
-  pyVmomi 9 types). Lab vCenter 8.0.1 used `"urn:vim25/8.0.1.0"`.
+- SOAPAction: newest advertised 8.x, otherwise newest advertised 7.x
+  (`SmartConnect` `preferredApiVersions` lists `vim.version.v8_*` then
+  `vim.version.v7_*`). A vSphere 9 host therefore stays on 8.x instead of
+  pyVmomi 9 types, and a vSphere 7 host negotiates 7.x. vSphere 6.x is
+  deprecated and unsupported: it advertises neither family, so login fails.
+  Lab vCenter 8.0.1 used `"urn:vim25/8.0.1.0"`.
 
 VDDK logs this as `Connected to VIM Server` / `Authenticating user` /
 `Logged in!`. OpenVixDiskLib keeps that `ServiceInstance` and
